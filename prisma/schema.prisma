@@ -1,0 +1,29 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Comment {
+  id        Int      @id @default(autoincrement())
+  author    String?
+  text      String
+  photo     String?
+  createdAt DateTime @default(now())
+}
+
+model User {
+  id                    Int       @id @default(autoincrement())
+  email                 String    @unique
+  passwordHash          String
+  name                  String?
+  phone                 String?
+  country               String?
+  binanceApiKeyEnc      String?
+  binanceApiSecretEnc   String?
+  binanceConnectedAt    DateTime?
+  createdAt             DateTime  @default(now())
+}
