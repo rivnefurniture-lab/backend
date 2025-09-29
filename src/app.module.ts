@@ -2,9 +2,9 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from './modules/auth/auth.module';
 import { CommentsModule } from './modules/comments/comments.module';
 import { SseModule } from './modules/sse/sse.module';
-// import { ExchangeModule } from './modules/exchange/exchange.module';
+import { ExchangeModule } from './modules/exchange/exchange.module';
 
 @Module({
-  imports: [AuthModule, CommentsModule, SseModule], // ExchangeModule
+  imports: [AuthModule, CommentsModule, SseModule, ExchangeModule],
 })
 export class AppModule {}
