@@ -13,6 +13,7 @@ interface Job {
   timer: NodeJS.Timer;
 }
 
+// TODO: FIX TS ERRORS
 @Injectable()
 export class StrategiesService {
   private readonly logger = new Logger(StrategiesService.name);
