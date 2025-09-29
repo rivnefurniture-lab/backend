@@ -1,4 +1,5 @@
-import { PrismaClient } from '@prisma/client';
+const PrismaClient = require('@prisma/client').PrismaClient;
+
 const prisma = new PrismaClient();
 const data = [
   {"author": null, "text": "Losers guess. Winners backtest. (ще думаю)", "photo": null},
