@@ -5,10 +5,11 @@ import * as crypto from 'crypto';
 
 type PlanId = 'starter' | 'pro' | 'elite';
 
-const amountMap: Record<PlanId, number> = {
-  starter: 9,
-  pro: 29,
-  elite: 79,
+type CoinbaseChargeResponse = {
+  data?: {
+    hosted_url?: string;
+    [key: string]: unknown;
+  };
 };
 
 @Injectable()
@@ -51,7 +52,12 @@ export class PaymentsService {
     const priv = process.env.LIQPAY_PRIVATE_KEY;
     if (!pub || !priv) throw new BadRequestException('LiqPay not configured');
 
-    const amountMap = { starter: 9, pro: 29, elite: 79 };
+    const amountMap: Record<PlanId, number> = {
+      starter: 9,
+      pro: 29,
+      elite: 79,
+    };
+
     const payload = {
       public_key: pub,
       version: 3,
@@ -109,7 +115,7 @@ export class PaymentsService {
         cancel_url: `${this.FRONTEND_URL}/pay/cancel`,
       }),
     });
-    const data = await resp.json();
+    const data = (await resp.json()) as CoinbaseChargeResponse;
     const url = data?.data?.hosted_url;
     if (!url) throw new BadRequestException('Coinbase Commerce error');
 
