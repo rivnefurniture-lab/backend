@@ -10,8 +10,10 @@ import { sign as jwtSign } from 'jsonwebtoken';
 import * as crypto from 'crypto';
 import { UserDto } from './dto/user.dto';
 import { RegisterDto } from './dto/register.dto';
+import { OAuth2Client } from 'google-auth-library';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+const OAuth2 = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 @Injectable()
 export class AuthService {
@@ -27,6 +29,11 @@ export class AuthService {
     const exists = await this.prisma.client.user.findUnique({
       where: { email },
     });
+    if (exists && !exists.passwordHash) {
+      throw new ConflictException(
+        'Account exists via Google. Please log in with Google or set a password.',
+      );
+    }
     if (exists) throw new ConflictException('Email already registered');
 
     const passwordHash = await bcrypt.hash(data.password, 10);
@@ -52,13 +59,19 @@ export class AuthService {
     return user;
   }
 
-  // Login
   async login(email: string, password: string): Promise<UserDto> {
     const user = await this.prisma.client.user.findUnique({
       where: { email: email.toLowerCase() },
     });
 
     if (!user) throw new UnauthorizedException('Invalid credentials');
+
+    // Reject users without passwordHash (i.e., Google-only accounts)
+    if (!user.passwordHash) {
+      throw new UnauthorizedException(
+        'This account is registered via Google. Use Google login or set a password.',
+      );
+    }
 
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) throw new UnauthorizedException('Invalid credentials');
@@ -73,7 +86,63 @@ export class AuthService {
     };
   }
 
-  // Get me
+  async loginWithGoogle(idToken: string): Promise<UserDto> {
+    try {
+      const ticket = await OAuth2.verifyIdToken({
+        idToken,
+        audience: process.env.GOOGLE_CLIENT_ID,
+      });
+
+      const payload = ticket.getPayload();
+      if (!payload) throw new UnauthorizedException('Invalid Google token');
+
+      const googleId = payload.sub;
+      const email = payload.email;
+      const name = payload.name ?? null;
+
+      if (!email)
+        throw new UnauthorizedException('Google account has no email');
+
+      let user = await this.prisma.client.user.findUnique({
+        where: { googleId },
+      });
+
+      if (!user) {
+        user = await this.prisma.client.user.findUnique({
+          where: { email },
+        });
+      }
+
+      if (!user) {
+        user = await this.prisma.client.user.create({
+          data: {
+            googleId,
+            email,
+            name,
+          },
+        });
+      } else if (!user.googleId) {
+        // Attach googleId if they signed up earlier with email/password
+        user = await this.prisma.client.user.update({
+          where: { id: user.id },
+          data: { googleId },
+        });
+      }
+
+      return {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        phone: user.phone,
+        country: user.country,
+        createdAt: user.createdAt,
+      };
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_) {
+      throw new UnauthorizedException('Google login failed');
+    }
+  }
+
   async getMe(userId: number): Promise<UserDto> {
     const user = await this.prisma.client.user.findUnique({
       where: { id: userId },

@@ -44,6 +44,10 @@ $ npm run start:dev
 $ npm run start:prod
 ```
 
+## DB migration
+
+`npx prisma migrate dev --name type-here-message`
+
 ## Run tests
 
 ```bash

@@ -57,6 +57,24 @@ export class AuthController {
     return user;
   }
 
+  @Post('login/google')
+  async loginGoogle(
+    @Body('idToken') idToken: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const user = await this.authService.loginWithGoogle(idToken);
+    const token = this.authService.sign({ uid: user.id, email: user.email });
+
+    res.cookie('token', token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: false,
+      maxAge: 7 * 24 * 3600 * 1000,
+    });
+
+    return user;
+  }
+
   @Post('logout')
   logout(@Res() res: Response) {
     res.clearCookie('token', {
