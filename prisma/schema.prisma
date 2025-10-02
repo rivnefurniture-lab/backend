@@ -25,6 +25,8 @@ model User {
   binanceApiKeyEnc    String?
   binanceApiSecretEnc String?
   binanceConnectedAt  DateTime?
+  emailVerified       Boolean   @default(false)
+  emailVerifyToken    String?
   createdAt           DateTime  @default(now())
   googleId            String?   @unique
 }

@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { sendVerificationEmail } from '../../services/mail.service';
 import * as bcrypt from 'bcryptjs';
 import { sign as jwtSign } from 'jsonwebtoken';
 import * as crypto from 'crypto';
@@ -38,6 +39,8 @@ export class AuthService {
 
     const passwordHash = await bcrypt.hash(data.password, 10);
 
+    const emailVerifyToken = crypto.randomBytes(32).toString('hex');
+
     const user = await this.prisma.client.user.create({
       data: {
         email,
@@ -45,6 +48,8 @@ export class AuthService {
         name: data.name ?? null,
         phone: data.phone ?? null,
         country: data.country ?? null,
+        emailVerifyToken,
+        emailVerified: false,
       },
       select: {
         id: true,
@@ -56,7 +61,24 @@ export class AuthService {
       },
     });
 
+    await sendVerificationEmail(email, emailVerifyToken);
+
     return user;
+  }
+
+  async verifyEmail(token: string): Promise<{ message: string }> {
+    const user = await this.prisma.client.user.findFirst({
+      where: { emailVerifyToken: token },
+    });
+
+    if (!user) throw new NotFoundException('Invalid token');
+
+    await this.prisma.client.user.update({
+      where: { id: user.id },
+      data: { emailVerified: true, emailVerifyToken: null },
+    });
+
+    return { message: 'Email verified successfully' };
   }
 
   async login(email: string, password: string): Promise<UserDto> {

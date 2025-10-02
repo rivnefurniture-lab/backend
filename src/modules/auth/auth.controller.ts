@@ -6,6 +6,7 @@ import {
   Req,
   Res,
   UseGuards,
+  Query,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
@@ -38,6 +39,11 @@ export class AuthController {
       maxAge: 7 * 24 * 3600 * 1000,
     });
     return user;
+  }
+
+  @Get('verify-email')
+  async verifyEmail(@Query('token') token: string) {
+    return this.authService.verifyEmail(token);
   }
 
   @Post('login')
