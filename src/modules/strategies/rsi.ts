@@ -1,4 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment */
+import { Exchange } from 'ccxt';
+
+// TODO: check and refactor it all
+
 function rsi(values: string | any[], period = 14) {
   if (values.length < period + 1) return [];
   let gains = 0,
@@ -22,21 +26,31 @@ function rsi(values: string | any[], period = 14) {
   return out;
 }
 
+interface RsiMeanReversionParams {
+  exchange: Exchange;
+  symbol: string;
+  timeframe?: string;
+  amountUSDT?: number;
+  logger?: (msg: string) => void;
+}
+
 export async function rsiMeanReversion({
   exchange,
   symbol,
   timeframe = '1m',
   amountUSDT = 50,
   logger,
-}) {
+}: RsiMeanReversionParams) {
   await exchange.loadMarkets();
   const market = exchange.market(symbol);
   const ohlcv = await exchange.fetchOHLCV(symbol, timeframe, undefined, 200);
-  const closes = ohlcv.map((x) => x[4]);
+  const closes = ohlcv.map((x: any[]) => x[4]);
   const r = rsi(closes, 14);
   const currentRSI = r[r.length - 1];
   const last = ohlcv[ohlcv.length - 1][4];
-  logger(`Last price ${symbol}: ${last}, RSI=${currentRSI?.toFixed(2)}`);
+  if (logger) {
+    logger(`Last price ${symbol}: ${last}, RSI=${currentRSI?.toFixed(2)}`);
+  }
   const balances = await exchange.fetchBalance();
   const base = market.base,
     quote = market.quote;
@@ -49,9 +63,13 @@ export async function rsiMeanReversion({
   ) {
     const amountBase = amountUSDT / last;
     const amt = exchange.amountToPrecision(symbol, amountBase);
-    logger(`BUY market ${symbol} amount ${amt} (≈$${amountUSDT})`);
+    if (logger) {
+      logger(`BUY market ${symbol} amount ${amt} (≈$${amountUSDT})`);
+    }
     const order = await exchange.createOrder(symbol, 'market', 'buy', amt);
-    logger(`BUY executed: ${order.id || 'id?'} filled=${order.filled}`);
+    if (logger) {
+      logger(`BUY executed: ${order.id || 'id?'} filled=${order.filled}`);
+    }
     return { side: 'buy', order };
   } else if (
     currentRSI !== undefined &&
@@ -59,12 +77,18 @@ export async function rsiMeanReversion({
     baseBal * last > 10
   ) {
     const amt = exchange.amountToPrecision(symbol, baseBal);
-    logger(`SELL market ${symbol} amount ${amt}`);
+    if (logger) {
+      logger(`SELL market ${symbol} amount ${amt}`);
+    }
     const order = await exchange.createOrder(symbol, 'market', 'sell', amt);
-    logger(`SELL executed: ${order.id || 'id?'} filled=${order.filled}`);
+    if (logger) {
+      logger(`SELL executed: ${order.id || 'id?'} filled=${order.filled}`);
+    }
     return { side: 'sell', order };
   } else {
-    logger('No trade condition met.');
+    if (logger) {
+      logger('No trade condition met.');
+    }
     return { side: 'none' };
   }
 }

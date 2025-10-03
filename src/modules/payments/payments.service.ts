@@ -3,8 +3,6 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import Stripe from 'stripe';
 import * as crypto from 'crypto';
 
-type PlanId = 'starter' | 'pro' | 'elite';
-
 type CoinbaseChargeResponse = {
   data?: {
     hosted_url?: string;

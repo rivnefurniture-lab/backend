@@ -7,17 +7,17 @@ export class PaymentsController {
   constructor(private readonly payments: PaymentsService) {}
 
   @Post('stripe/create-session')
-  stripe(@Body() body: { planId?: string; redirect?: string }) {
+  stripe(@Body() body: { planId?: PlanId; redirect?: string }) {
     return this.payments.createStripeSession(body.planId, body.redirect);
   }
 
   @Post('liqpay/create')
-  liqpay(@Body() body: { planId?: string; redirect?: string }) {
+  liqpay(@Body() body: { planId?: PlanId; redirect?: string }) {
     return this.payments.createLiqpay(body.planId, body.redirect);
   }
 
   @Post('crypto/create')
-  crypto(@Body() body: { planId?: string; redirect?: string }) {
+  crypto(@Body() body: { planId?: PlanId; redirect?: string }) {
     return this.payments.createCrypto(body.planId, body.redirect);
   }
 }
