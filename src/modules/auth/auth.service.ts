@@ -69,7 +69,9 @@ export class AuthService {
     return user;
   }
 
-  async verifyEmail(token: string): Promise<{ message: string }> {
+  async verifyEmail(
+    token: string,
+  ): Promise<{ message: string; email: string }> {
     const user = await this.prisma.client.user.findFirst({
       where: { emailVerifyToken: token },
     });
@@ -81,7 +83,7 @@ export class AuthService {
       data: { emailVerified: true, emailVerifyToken: null },
     });
 
-    return { message: 'Email verified successfully' };
+    return { message: 'Email verified successfully', email: user.email };
   }
 
   async login(email: string, password: string): Promise<UserDto> {
