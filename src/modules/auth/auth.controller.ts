@@ -13,6 +13,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 import type { Request, Response } from 'express';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto, ResetPasswordDto } from './dto/password.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -79,6 +80,16 @@ export class AuthController {
     });
 
     return user;
+  }
+
+  @Post('forgot-password')
+  async forgotPassword(@Body() body: ForgotPasswordDto) {
+    return this.authService.forgotPassword(body.email);
+  }
+
+  @Post('reset-password')
+  async resetPassword(@Body() body: ResetPasswordDto) {
+    return this.authService.resetPassword(body.token, body.newPassword);
   }
 
   @Post('logout')

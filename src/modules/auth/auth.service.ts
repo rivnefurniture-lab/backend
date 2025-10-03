@@ -5,9 +5,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { sendVerificationEmail } from '../../services/mail.service';
+import {
+  sendVerificationEmail,
+  sendPasswordResetEmail,
+} from '../../services/mail.service';
 import * as bcrypt from 'bcryptjs';
-import { sign as jwtSign } from 'jsonwebtoken';
+import { sign as jwtSign, verify as jwtVerify, JwtPayload } from 'jsonwebtoken';
 import * as crypto from 'crypto';
 import { UserDto } from './dto/user.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -162,6 +165,44 @@ export class AuthService {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (_) {
       throw new UnauthorizedException('Google login failed');
+    }
+  }
+
+  async forgotPassword(email: string) {
+    const user = await this.prisma.client.user.findUnique({ where: { email } });
+    if (!user) {
+      return { message: 'If this email exists, a reset link has been sent.' };
+    }
+
+    const token = this.sign({ userId: user.id, purpose: 'password-reset' });
+
+    await sendPasswordResetEmail(user.email, token);
+
+    return { message: 'If this email exists, a reset link has been sent.' };
+  }
+
+  async resetPassword(token: string, newPassword: string) {
+    try {
+      const payload = jwtVerify(token, JWT_SECRET) as JwtPayload & {
+        userId: number;
+        purpose?: string;
+      };
+
+      if (payload.purpose !== 'password-reset') {
+        throw new UnauthorizedException('Invalid token purpose');
+      }
+
+      const passwordHash = await bcrypt.hash(newPassword, 10);
+
+      await this.prisma.client.user.update({
+        where: { id: payload.userId },
+        data: { passwordHash },
+      });
+
+      return { message: 'Password updated successfully' };
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_) {
+      throw new UnauthorizedException('Invalid or expired token');
     }
   }
 
