@@ -13,7 +13,7 @@ import { SupabaseStrategy } from './strategies/supabase.strategy';
       useFactory: (configService: ConfigService) => {
         return {
           global: true,
-          secret: configService.get<string>('JWT_SECRET'),
+          secret: configService.get<string>('JWT_SECRET')!,
           signOptions: { expiresIn: 40000 },
         };
       },
