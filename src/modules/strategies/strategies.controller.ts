@@ -1,9 +1,11 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
+import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { StrategiesService } from './strategies.service';
 import { StartStrategyDto } from './dto/start-strategy.dto';
 import { StopStrategyDto } from './dto/stop-strategy.dto';
 import { ExchangeService } from '../exchange/exchange.service';
+import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 
+@UseGuards(JwtAuthGuard)
 @Controller('strategies')
 export class StrategiesController {
   constructor(

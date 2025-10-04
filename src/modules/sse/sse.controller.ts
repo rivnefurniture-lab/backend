@@ -1,7 +1,9 @@
-import { Controller, Sse } from '@nestjs/common';
+import { Controller, Sse, UseGuards } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { SseService } from './sse.service';
+import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 
+@UseGuards(JwtAuthGuard)
 @Controller('sse')
 export class SseController {
   constructor(private readonly sseService: SseService) {}

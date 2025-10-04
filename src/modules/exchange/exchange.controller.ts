@@ -1,8 +1,10 @@
-import { Controller, Post, Get, Body, Query } from '@nestjs/common';
+import { Controller, Post, Get, Body, Query, UseGuards } from '@nestjs/common';
 import { ExchangeService } from './exchange.service';
 import { ConnectDto } from './connect.dto';
 import { MarketOrderDto } from './order.dto';
+import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 
+@UseGuards(JwtAuthGuard)
 @Controller('exchange')
 export class ExchangeController {
   constructor(private readonly exchange: ExchangeService) {}
