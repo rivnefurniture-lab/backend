@@ -1,9 +1,10 @@
+// Production Prisma Schema - Use PostgreSQL
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -27,8 +28,8 @@ model User {
   googleId            String?   @unique
   
   // Subscription
-  subscriptionPlan    String?   // starter, pro, elite
-  subscriptionStatus  String?   // active, cancelled, expired
+  subscriptionPlan    String?
+  subscriptionStatus  String?
   subscriptionExpires DateTime?
   
   // Relations
@@ -36,6 +37,9 @@ model User {
   strategyRuns        StrategyRun[]
   trades              Trade[]
   backtestResults     BacktestResult[]
+
+  @@index([email])
+  @@index([supabaseId])
 }
 
 model Strategy {
@@ -44,47 +48,41 @@ model Strategy {
   description String?
   category    String?
   
-  // Strategy configuration (JSON)
-  config      String   // JSON: entry_conditions, exit_conditions, etc.
-  
-  // Settings
-  pairs       String   // JSON array of trading pairs
+  config      String
+  pairs       String
   maxDeals    Int      @default(5)
   orderSize   Float    @default(1000)
   
-  // Stats from backtests
   lastBacktestProfit    Float?
   lastBacktestDrawdown  Float?
   lastBacktestSharpe    Float?
   lastBacktestWinRate   Float?
   
-  // Meta
   isPublic    Boolean  @default(false)
   isActive    Boolean  @default(false)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   
-  // Relations
   userId      Int
-  user        User     @relation(fields: [userId], references: [id])
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   runs        StrategyRun[]
   backtests   BacktestResult[]
+
+  @@index([userId])
+  @@index([isPublic])
 }
 
 model StrategyRun {
   id          Int       @id @default(autoincrement())
   
-  // Configuration snapshot
-  config      String    // JSON snapshot of strategy config at start
-  pairs       String    // JSON array
+  config      String
+  pairs       String
   exchange    String    @default("binance")
   
-  // Status
-  status      String    @default("running") // running, paused, stopped, error
+  status      String    @default("running")
   startedAt   DateTime  @default(now())
   stoppedAt   DateTime?
   
-  // Performance
   initialBalance  Float
   currentBalance  Float?
   totalProfit     Float?
@@ -92,65 +90,65 @@ model StrategyRun {
   winningTrades   Int     @default(0)
   maxDrawdown     Float?
   
-  // Error tracking
   lastError   String?
   errorCount  Int       @default(0)
   
-  // Relations
   userId      Int
-  user        User      @relation(fields: [userId], references: [id])
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   strategyId  Int
-  strategy    Strategy  @relation(fields: [strategyId], references: [id])
+  strategy    Strategy  @relation(fields: [strategyId], references: [id], onDelete: Cascade)
   trades      Trade[]
+
+  @@index([userId])
+  @@index([strategyId])
+  @@index([status])
 }
 
 model Trade {
   id            Int      @id @default(autoincrement())
   
-  // Trade details
   symbol        String
-  side          String   // buy, sell
-  type          String   @default("market") // market, limit
+  side          String
+  type          String   @default("market")
   quantity      Float
   price         Float
-  amount        Float    // quantity * price
+  amount        Float
   fee           Float?
   
-  // P&L
   entryPrice    Float?
   exitPrice     Float?
   profitLoss    Float?
   profitPercent Float?
   
-  // Status
-  status        String   @default("pending") // pending, filled, cancelled, failed
-  orderId       String?  // Exchange order ID
+  status        String   @default("pending")
+  orderId       String?
   
-  // Meta
   comment       String?
-  marketState   String?  // bullish, bearish
+  marketState   String?
   createdAt     DateTime @default(now())
   executedAt    DateTime?
   
-  // Relations
   userId        Int
-  user          User     @relation(fields: [userId], references: [id])
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   strategyRunId Int?
-  strategyRun   StrategyRun? @relation(fields: [strategyRunId], references: [id])
+  strategyRun   StrategyRun? @relation(fields: [strategyRunId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([strategyRunId])
+  @@index([symbol])
+  @@index([createdAt])
 }
 
 model BacktestResult {
   id          Int      @id @default(autoincrement())
   name        String
   
-  // Configuration
-  config      String   // JSON: full strategy config
-  pairs       String   // JSON array
+  config      String
+  pairs       String
   startDate   DateTime
   endDate     DateTime
   initialBalance Float
   
-  // Results
   netProfit       Float
   netProfitUsd    Float
   maxDrawdown     Float
@@ -161,17 +159,19 @@ model BacktestResult {
   profitFactor    Float
   yearlyReturn    Float
   
-  // Chart data (JSON)
   chartData   String?
-  trades      String?  // JSON array of trades
+  trades      String?
   
   createdAt   DateTime @default(now())
   
-  // Relations
   userId      Int
-  user        User     @relation(fields: [userId], references: [id])
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   strategyId  Int?
-  strategy    Strategy? @relation(fields: [strategyId], references: [id])
+  strategy    Strategy? @relation(fields: [strategyId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([strategyId])
+  @@index([createdAt])
 }
 
 model Comment {
@@ -181,3 +181,4 @@ model Comment {
   photo     String?
   createdAt DateTime @default(now())
 }
+

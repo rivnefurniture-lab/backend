@@ -1,122 +1,250 @@
 // src/modules/payments/payments.service.ts
 import { Injectable, BadRequestException } from '@nestjs/common';
-import Stripe from 'stripe';
 import * as crypto from 'crypto';
 
-type CoinbaseChargeResponse = {
+type PlanId = 'starter' | 'pro' | 'elite';
+
+interface BinancePayResponse {
+  status: string;
+  code: string;
   data?: {
-    hosted_url?: string;
-    [key: string]: unknown;
+    prepayId?: string;
+    terminalType?: string;
+    expireTime?: number;
+    qrcodeLink?: string;
+    qrContent?: string;
+    checkoutUrl?: string;
+    deeplink?: string;
+    universalUrl?: string;
   };
-};
+  errorMessage?: string;
+}
 
 @Injectable()
 export class PaymentsService {
-  private readonly STRIPE = process.env.STRIPE_SECRET_KEY
-    ? new Stripe(process.env.STRIPE_SECRET_KEY, {
-        apiVersion: '2025-08-27.basil',
-      })
-    : null;
-
   private readonly FRONTEND_URL =
-    process.env.FRONTEND_URL || 'http://localhost:5173';
+    process.env.FRONTEND_URL || 'http://localhost:3000';
 
-  private readonly PRICE_MAP: Record<string, string | undefined> = {
-    starter: process.env.STRIPE_PRICE_STARTER,
-    pro: process.env.STRIPE_PRICE_PRO,
-    elite: process.env.STRIPE_PRICE_ELITE,
+  private readonly PRICE_MAP: Record<PlanId, number> = {
+    starter: 9,
+    pro: 29,
+    elite: 79,
   };
 
-  async createStripeSession(planId: PlanId = 'starter', redirect = '/') {
-    if (!this.STRIPE) throw new BadRequestException('Stripe not configured');
-    const price = this.PRICE_MAP[planId];
-    if (!price)
-      throw new BadRequestException('Stripe price id not set for plan');
+  // ==================== BINANCE PAY ====================
+  private generateBinanceSignature(
+    timestamp: string,
+    nonce: string,
+    body: string,
+  ): string {
+    const secretKey = process.env.BINANCE_PAY_SECRET_KEY;
+    if (!secretKey) throw new BadRequestException('Binance Pay not configured');
 
-    const session = await this.STRIPE.checkout.sessions.create({
-      mode: 'subscription',
-      line_items: [{ price, quantity: 1 }],
-      success_url: `${this.FRONTEND_URL}/pay/success?plan=${planId}&redirect=${encodeURIComponent(
-        redirect,
-      )}`,
-      cancel_url: `${this.FRONTEND_URL}/pay/cancel`,
-    });
-
-    return { url: session.url };
+    const payload = `${timestamp}\n${nonce}\n${body}\n`;
+    return crypto
+      .createHmac('sha512', secretKey)
+      .update(payload)
+      .digest('hex')
+      .toUpperCase();
   }
 
-  createLiqpay(planId: PlanId = 'starter', redirect = '/') {
-    const pub = process.env.LIQPAY_PUBLIC_KEY;
-    const priv = process.env.LIQPAY_PRIVATE_KEY;
-    if (!pub || !priv) throw new BadRequestException('LiqPay not configured');
+  async createBinancePayOrder(planId: PlanId = 'starter', userId?: string) {
+    const apiKey = process.env.BINANCE_PAY_API_KEY;
+    const merchantId = process.env.BINANCE_PAY_MERCHANT_ID;
 
-    const amountMap: Record<PlanId, number> = {
-      starter: 9,
-      pro: 29,
-      elite: 79,
+    if (!apiKey || !merchantId) {
+      throw new BadRequestException('Binance Pay not configured');
+    }
+
+    const amount = this.PRICE_MAP[planId];
+    const timestamp = Date.now().toString();
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const merchantTradeNo = `ALG${Date.now()}${Math.random().toString(36).substring(7)}`;
+
+    const requestBody = {
+      env: {
+        terminalType: 'WEB',
+      },
+      merchantTradeNo,
+      orderAmount: amount.toFixed(2),
+      currency: 'USDT',
+      description: `Algotcha ${planId} subscription`,
+      goodsDetails: [
+        {
+          goodsType: '02', // Virtual goods
+          goodsCategory: 'Z000', // Others
+          referenceGoodsId: planId,
+          goodsName: `Algotcha ${planId.charAt(0).toUpperCase() + planId.slice(1)} Plan`,
+          goodsDetail: `Monthly subscription to Algotcha ${planId} trading strategies`,
+          goodsUnitAmount: { currency: 'USDT', amount: amount.toFixed(2) },
+          goodsQuantity: '1',
+        },
+      ],
+      returnUrl: `${this.FRONTEND_URL}/pay-success?plan=${planId}`,
+      cancelUrl: `${this.FRONTEND_URL}/pay-cancel`,
+      webhookUrl: `${process.env.BACKEND_URL || 'http://localhost:8080'}/pay/binance/webhook`,
+      orderExpireTime: Date.now() + 3600000, // 1 hour
     };
 
-    const payload = {
-      public_key: pub,
-      version: 3,
-      action: 'pay',
-      amount: amountMap[planId] || 9,
+    const bodyString = JSON.stringify(requestBody);
+    const signature = this.generateBinanceSignature(timestamp, nonce, bodyString);
+
+    const response = await fetch(
+      'https://bpay.binanceapi.com/binancepay/openapi/v2/order',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'BinancePay-Timestamp': timestamp,
+          'BinancePay-Nonce': nonce,
+          'BinancePay-Certificate-SN': apiKey,
+          'BinancePay-Signature': signature,
+        },
+        body: bodyString,
+      },
+    );
+
+    const data = (await response.json()) as BinancePayResponse;
+
+    if (data.status !== 'SUCCESS') {
+      throw new BadRequestException(
+        data.errorMessage || 'Binance Pay order creation failed',
+      );
+    }
+
+    return {
+      provider: 'binance',
+      checkoutUrl: data.data?.checkoutUrl,
+      qrCode: data.data?.qrcodeLink,
+      universalUrl: data.data?.universalUrl,
+      orderId: merchantTradeNo,
+      expireTime: data.data?.expireTime,
+    };
+  }
+
+  // ==================== WAYFORPAY ====================
+  private generateWayForPaySignature(params: string[]): string {
+    const secretKey = process.env.WAYFORPAY_SECRET_KEY;
+    if (!secretKey) throw new BadRequestException('WayForPay not configured');
+
+    const signString = params.join(';');
+    return crypto.createHmac('md5', secretKey).update(signString).digest('hex');
+  }
+
+  async createWayForPayOrder(planId: PlanId = 'starter', userId?: string) {
+    const merchantAccount = process.env.WAYFORPAY_MERCHANT_ACCOUNT;
+    const merchantDomain = process.env.WAYFORPAY_MERCHANT_DOMAIN;
+
+    if (!merchantAccount || !merchantDomain) {
+      throw new BadRequestException('WayForPay not configured');
+    }
+
+    const amount = this.PRICE_MAP[planId];
+    const orderReference = `ALG${Date.now()}`;
+    const orderDate = Math.floor(Date.now() / 1000);
+    const productName = `Algotcha ${planId.charAt(0).toUpperCase() + planId.slice(1)} Plan`;
+    const productCount = 1;
+    const productPrice = amount;
+
+    // Signature string: merchantAccount;merchantDomainName;orderReference;orderDate;amount;currency;productName;productCount;productPrice
+    const signatureParams = [
+      merchantAccount,
+      merchantDomain,
+      orderReference,
+      orderDate.toString(),
+      amount.toString(),
+      'USD',
+      productName,
+      productCount.toString(),
+      productPrice.toString(),
+    ];
+
+    const merchantSignature = this.generateWayForPaySignature(signatureParams);
+
+    // Build form data for redirect
+    const formData = {
+      merchantAccount,
+      merchantDomainName: merchantDomain,
+      merchantTransactionSecureType: 'AUTO',
+      merchantSignature,
+      orderReference,
+      orderDate,
+      amount,
       currency: 'USD',
-      description: `algotcha ${planId} subscription`,
-      result_url: `${this.FRONTEND_URL}/pay/success?plan=${planId}&redirect=${encodeURIComponent(
-        redirect,
-      )}`,
-      server_url: `${this.FRONTEND_URL}/pay/success?plan=${planId}&redirect=${encodeURIComponent(
-        redirect,
-      )}`,
+      productName: [productName],
+      productCount: [productCount],
+      productPrice: [productPrice],
+      returnUrl: `${this.FRONTEND_URL}/pay-success?plan=${planId}`,
+      serviceUrl: `${process.env.BACKEND_URL || 'http://localhost:8080'}/pay/wayforpay/webhook`,
+      language: 'EN',
     };
-    const data = Buffer.from(JSON.stringify(payload)).toString('base64');
-    const signature = crypto
-      .createHash('sha1')
-      .update(priv + data + priv)
-      .digest('base64');
 
-    return { url: 'https://www.liqpay.ua/api/3/checkout', data, signature };
+    return {
+      provider: 'wayforpay',
+      formAction: 'https://secure.wayforpay.com/pay',
+      formData,
+      orderId: orderReference,
+    };
   }
 
-  async createCrypto(planId: PlanId = 'starter', redirect = '/') {
-    const amountMap = { starter: 9, pro: 29, elite: 79 };
-    const apiKey = process.env.COINBASE_COMMERCE_API_KEY;
+  // ==================== DIRECT CRYPTO (Manual) ====================
+  async createCryptoPayment(planId: PlanId = 'starter') {
+    const amount = this.PRICE_MAP[planId];
+    const walletAddress = process.env.CRYPTO_WALLET_ADDRESS;
 
-    if (!apiKey) {
+    if (!walletAddress) {
+      // Return demo wallet for testing
       return {
-        address: 'bc1qexampleexampleexample',
-        amount: amountMap[planId] || 9,
-        currency: 'USD',
+        provider: 'crypto',
+        walletAddress: 'YOUR_USDT_TRC20_ADDRESS',
+        amount,
+        currency: 'USDT',
+        network: 'TRC20',
+        note: 'Send exact amount and contact support with transaction hash',
       };
     }
 
-    const resp = await fetch('https://api.commerce.coinbase.com/charges', {
-      method: 'POST',
-      headers: {
-        'X-CC-Api-Key': apiKey,
-        'X-CC-Version': '2018-03-22',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        name: `algotcha ${planId}`,
-        description: 'Subscription payment',
-        pricing_type: 'fixed_price',
-        local_price: {
-          amount: String(amountMap[planId] || 9),
-          currency: 'USD',
-        },
-        metadata: { planId, redirect },
-        redirect_url: `${this.FRONTEND_URL}/pay/success?plan=${planId}&redirect=${encodeURIComponent(
-          redirect,
-        )}`,
-        cancel_url: `${this.FRONTEND_URL}/pay/cancel`,
-      }),
-    });
-    const data = (await resp.json()) as CoinbaseChargeResponse;
-    const url = data?.data?.hosted_url;
-    if (!url) throw new BadRequestException('Coinbase Commerce error');
+    return {
+      provider: 'crypto',
+      walletAddress,
+      amount,
+      currency: 'USDT',
+      network: process.env.CRYPTO_NETWORK || 'TRC20',
+      note: 'Send exact amount and contact support with transaction hash',
+    };
+  }
 
-    return { url };
+  // ==================== WEBHOOKS ====================
+  verifyBinanceWebhook(
+    timestamp: string,
+    nonce: string,
+    body: string,
+    signature: string,
+  ): boolean {
+    const expectedSignature = this.generateBinanceSignature(
+      timestamp,
+      nonce,
+      body,
+    );
+    return signature === expectedSignature;
+  }
+
+  verifyWayForPayWebhook(body: any): boolean {
+    const secretKey = process.env.WAYFORPAY_SECRET_KEY;
+    if (!secretKey) return false;
+
+    const signatureParams = [
+      body.merchantAccount,
+      body.orderReference,
+      body.amount,
+      body.currency,
+      body.authCode,
+      body.cardPan,
+      body.transactionStatus,
+      body.reasonCode,
+    ];
+
+    const expectedSignature = this.generateWayForPaySignature(signatureParams);
+    return body.merchantSignature === expectedSignature;
   }
 }

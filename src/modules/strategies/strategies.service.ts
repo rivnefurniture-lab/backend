@@ -1,73 +1,653 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { StartStrategyDto } from './dto/start-strategy.dto';
 import { StopStrategyDto } from './dto/stop-strategy.dto';
-import { rsiMeanReversion } from './rsi';
+import { PrismaService } from '../../prisma/prisma.service';
 import { Exchange } from 'ccxt';
 
-interface Job {
+interface ActiveJob {
   id: string;
-  strategyId: string;
+  runId: number;
+  strategyId: number;
+  userId: number;
   exchange: string;
-  symbol: string;
-  timeframe: string;
-  amountUSDT: number;
-  timer: NodeJS.Timer;
+  symbols: string[];
+  config: any;
+  timer: NodeJS.Timeout;
+  status: 'running' | 'paused' | 'error';
+  stats: {
+    trades: number;
+    wins: number;
+    profit: number;
+    lastCheck: Date;
+  };
 }
 
-// TODO: FIX TS ERRORS
+interface IndicatorValues {
+  rsi?: number;
+  prevRsi?: number;
+  macdLine?: number;
+  macdSignal?: number;
+  prevMacdLine?: number;
+  prevMacdSignal?: number;
+  smaFast?: number;
+  smaSlow?: number;
+  prevSmaFast?: number;
+  prevSmaSlow?: number;
+  bbPercent?: number;
+  prevBbPercent?: number;
+  close: number;
+  prevClose?: number;
+}
+
 @Injectable()
 export class StrategiesService {
   private readonly logger = new Logger(StrategiesService.name);
-  private jobs: Record<string, Job> = {};
+  private jobs: Map<string, ActiveJob> = new Map();
+  private indicatorCache: Map<string, any[]> = new Map();
 
-  async start(dto: StartStrategyDto, exchangeInstance: Exchange) {
-    if (!exchangeInstance) {
-      throw new BadRequestException('Exchange not connected');
+  constructor(private readonly prisma: PrismaService) {}
+
+  // Calculate RSI
+  private calculateRSI(closes: number[], period: number = 14): number | null {
+    if (closes.length < period + 1) return null;
+    
+    let gains = 0;
+    let losses = 0;
+    
+    for (let i = closes.length - period; i < closes.length; i++) {
+      const diff = closes[i] - closes[i - 1];
+      if (diff >= 0) gains += diff;
+      else losses -= diff;
+    }
+    
+    const avgGain = gains / period;
+    const avgLoss = losses / period;
+    const rs = avgGain / (avgLoss || 1e-9);
+    
+    return 100 - 100 / (1 + rs);
+  }
+
+  // Calculate SMA
+  private calculateSMA(values: number[], period: number): number | null {
+    if (values.length < period) return null;
+    const slice = values.slice(-period);
+    return slice.reduce((a, b) => a + b, 0) / period;
+  }
+
+  // Calculate EMA
+  private calculateEMA(values: number[], period: number): number[] {
+    if (values.length < period) return [];
+    
+    const ema: number[] = [];
+    const multiplier = 2 / (period + 1);
+    
+    // Start with SMA
+    let sum = 0;
+    for (let i = 0; i < period; i++) {
+      sum += values[i];
+    }
+    ema.push(sum / period);
+    
+    for (let i = period; i < values.length; i++) {
+      ema.push((values[i] - ema[ema.length - 1]) * multiplier + ema[ema.length - 1]);
+    }
+    
+    return ema;
+  }
+
+  // Calculate MACD
+  private calculateMACD(closes: number[], fast = 12, slow = 26, signal = 9): { line: number; signal: number } | null {
+    if (closes.length < slow + signal) return null;
+    
+    const emaFast = this.calculateEMA(closes, fast);
+    const emaSlow = this.calculateEMA(closes, slow);
+    
+    if (emaFast.length === 0 || emaSlow.length === 0) return null;
+    
+    const macdLine: number[] = [];
+    const offset = slow - fast;
+    
+    for (let i = 0; i < emaSlow.length; i++) {
+      if (i + offset < emaFast.length) {
+        macdLine.push(emaFast[i + offset] - emaSlow[i]);
+      }
+    }
+    
+    if (macdLine.length < signal) return null;
+    
+    const signalLine = this.calculateEMA(macdLine, signal);
+    
+    return {
+      line: macdLine[macdLine.length - 1],
+      signal: signalLine[signalLine.length - 1]
+    };
+  }
+
+  // Calculate Bollinger Bands %B
+  private calculateBBPercent(closes: number[], period = 20, deviation = 2): number | null {
+    if (closes.length < period) return null;
+    
+    const slice = closes.slice(-period);
+    const mean = slice.reduce((a, b) => a + b, 0) / period;
+    const variance = slice.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / period;
+    const stdDev = Math.sqrt(variance);
+    
+    const upperBand = mean + deviation * stdDev;
+    const lowerBand = mean - deviation * stdDev;
+    const currentPrice = closes[closes.length - 1];
+    
+    return (currentPrice - lowerBand) / (upperBand - lowerBand || 1);
+  }
+
+  // Check if conditions are met
+  private checkConditions(conditions: any[], indicators: IndicatorValues, prevIndicators?: IndicatorValues): boolean {
+    if (!conditions || conditions.length === 0) return true;
+
+    for (const cond of conditions) {
+      const indicator = cond.indicator;
+      const subfields = cond.subfields || {};
+      const condition = subfields.Condition || subfields['MACD Trigger'];
+      const targetValue = subfields['Signal Value'];
+
+      let currentValue: number | undefined;
+      let previousValue: number | undefined;
+      let compareValue: number | undefined;
+      let prevCompareValue: number | undefined;
+
+      switch (indicator) {
+        case 'RSI':
+          currentValue = indicators.rsi;
+          previousValue = prevIndicators?.rsi;
+          break;
+        case 'MA':
+          currentValue = indicators.smaFast;
+          previousValue = prevIndicators?.smaFast;
+          compareValue = indicators.smaSlow;
+          prevCompareValue = prevIndicators?.smaSlow;
+          break;
+        case 'MACD':
+          currentValue = indicators.macdLine;
+          previousValue = prevIndicators?.macdLine;
+          compareValue = indicators.macdSignal;
+          prevCompareValue = prevIndicators?.macdSignal;
+          
+          // Check line trigger if specified
+          const lineTrigger = subfields['Line Trigger'];
+          if (lineTrigger === 'Greater Than 0' && (currentValue ?? 0) <= 0) return false;
+          if (lineTrigger === 'Less Than 0' && (currentValue ?? 0) >= 0) return false;
+          break;
+        case 'BollingerBands':
+          currentValue = indicators.bbPercent;
+          previousValue = prevIndicators?.bbPercent;
+          break;
+        default:
+          continue;
+      }
+
+      if (currentValue === undefined) return false;
+
+      // For MA and MACD, compare fast to slow/signal
+      if (indicator === 'MA' || indicator === 'MACD') {
+        if (compareValue === undefined) return false;
+        
+        switch (condition) {
+          case 'Less Than':
+            if (currentValue >= compareValue) return false;
+            break;
+          case 'Greater Than':
+            if (currentValue <= compareValue) return false;
+            break;
+          case 'Crossing Up':
+            if (!prevCompareValue || !previousValue) return false;
+            if (!(previousValue <= prevCompareValue && currentValue > compareValue)) return false;
+            break;
+          case 'Crossing Down':
+            if (!prevCompareValue || !previousValue) return false;
+            if (!(previousValue >= prevCompareValue && currentValue < compareValue)) return false;
+            break;
+        }
+      } else {
+        // For RSI and BB, compare to target value
+        switch (condition) {
+          case 'Less Than':
+            if (currentValue >= targetValue) return false;
+            break;
+          case 'Greater Than':
+            if (currentValue <= targetValue) return false;
+            break;
+          case 'Crossing Up':
+            if (previousValue === undefined) return false;
+            if (!(previousValue <= targetValue && currentValue > targetValue)) return false;
+            break;
+          case 'Crossing Down':
+            if (previousValue === undefined) return false;
+            if (!(previousValue >= targetValue && currentValue < targetValue)) return false;
+            break;
+        }
+      }
     }
 
-    const id = `job_${Date.now()}`;
+    return true;
+  }
 
-    const tick = async () => {
-      try {
-        await rsiMeanReversion({
-          exchange: exchangeInstance,
-          symbol: dto.symbol,
-          timeframe: dto.timeframe,
-          amountUSDT: dto.amountUSDT,
-          logger: (m: string) => this.logger.log(`[${id}] ${m}`),
-        });
-      } catch (e) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        this.logger.error(`[${id}] ERROR: ${e.message}`);
+  // Get user's saved strategies
+  async getUserStrategies(userId: number) {
+    return this.prisma.strategy.findMany({
+      where: { userId },
+      orderBy: { updatedAt: 'desc' },
+      include: {
+        runs: {
+          where: { status: 'running' },
+          take: 1
+        }
+      }
+    });
+  }
+
+  // Save a new strategy
+  async saveStrategy(userId: number, data: {
+    name: string;
+    description?: string;
+    category?: string;
+    config: any;
+    pairs: string[];
+    maxDeals?: number;
+    orderSize?: number;
+    backtestResults?: any;
+  }) {
+    const strategy = await this.prisma.strategy.create({
+      data: {
+        userId,
+        name: data.name,
+        description: data.description,
+        category: data.category,
+        config: JSON.stringify(data.config),
+        pairs: JSON.stringify(data.pairs),
+        maxDeals: data.maxDeals || 5,
+        orderSize: data.orderSize || 1000,
+        lastBacktestProfit: data.backtestResults?.net_profit,
+        lastBacktestDrawdown: data.backtestResults?.max_drawdown,
+        lastBacktestSharpe: data.backtestResults?.sharpe_ratio,
+        lastBacktestWinRate: data.backtestResults?.win_rate,
+      }
+    });
+
+    return strategy;
+  }
+
+  // Update strategy
+  async updateStrategy(userId: number, strategyId: number, data: any) {
+    const strategy = await this.prisma.strategy.findFirst({
+      where: { id: strategyId, userId }
+    });
+
+    if (!strategy) {
+      throw new BadRequestException('Strategy not found');
+    }
+
+    return this.prisma.strategy.update({
+      where: { id: strategyId },
+      data: {
+        name: data.name,
+        description: data.description,
+        config: data.config ? JSON.stringify(data.config) : undefined,
+        pairs: data.pairs ? JSON.stringify(data.pairs) : undefined,
+        maxDeals: data.maxDeals,
+        orderSize: data.orderSize,
+      }
+    });
+  }
+
+  // Delete strategy
+  async deleteStrategy(userId: number, strategyId: number) {
+    const strategy = await this.prisma.strategy.findFirst({
+      where: { id: strategyId, userId }
+    });
+
+    if (!strategy) {
+      throw new BadRequestException('Strategy not found');
+    }
+
+    // Stop any running instances
+    for (const [jobId, job] of this.jobs) {
+      if (job.strategyId === strategyId) {
+        this.stopJob(jobId);
+      }
+    }
+
+    await this.prisma.strategy.delete({
+      where: { id: strategyId }
+    });
+
+    return { success: true };
+  }
+
+  // Start a strategy run
+  async startStrategy(
+    userId: number,
+    strategyId: number,
+    exchangeInstance: Exchange,
+    initialBalance: number
+  ) {
+    const strategy = await this.prisma.strategy.findFirst({
+      where: { id: strategyId, userId }
+    });
+
+    if (!strategy) {
+      throw new BadRequestException('Strategy not found');
+    }
+
+    // Check if already running
+    for (const job of this.jobs.values()) {
+      if (job.strategyId === strategyId && job.status === 'running') {
+        throw new BadRequestException('Strategy is already running');
+      }
+    }
+
+    const config = JSON.parse(strategy.config);
+    const pairs = JSON.parse(strategy.pairs);
+
+    // Create strategy run record
+    const run = await this.prisma.strategyRun.create({
+      data: {
+        userId,
+        strategyId,
+        config: strategy.config,
+        pairs: strategy.pairs,
+        exchange: 'binance',
+        initialBalance,
+        currentBalance: initialBalance,
+        status: 'running'
+      }
+    });
+
+    // Create job
+    const jobId = `run_${run.id}`;
+    const job: ActiveJob = {
+      id: jobId,
+      runId: run.id,
+      strategyId,
+      userId,
+      exchange: 'binance',
+      symbols: pairs,
+      config,
+      status: 'running',
+      timer: null as any,
+      stats: {
+        trades: 0,
+        wins: 0,
+        profit: 0,
+        lastCheck: new Date()
       }
     };
 
-    await tick();
-    // eslint-disable-next-line @typescript-eslint/no-misused-promises
-    const timer = setInterval(tick, dto.intervalMs);
+    // Start the trading loop
+    const intervalMs = config.intervalMs || 60000; // Default 1 minute
+    job.timer = setInterval(async () => {
+      await this.executeTradingTick(job, exchangeInstance);
+    }, intervalMs);
 
-    this.jobs[id] = { ...dto, id, timer };
-    this.logger.log(
-      `Started job ${id}: ${dto.strategyId} on ${dto.exchange} ${dto.symbol}`,
-    );
+    // Execute first tick immediately
+    this.executeTradingTick(job, exchangeInstance);
 
-    return { ok: true, id };
+    this.jobs.set(jobId, job);
+    
+    // Update strategy as active
+    await this.prisma.strategy.update({
+      where: { id: strategyId },
+      data: { isActive: true }
+    });
+
+    this.logger.log(`Started strategy run ${run.id} for strategy ${strategyId}`);
+
+    return {
+      success: true,
+      runId: run.id,
+      jobId,
+      message: `Strategy started on ${pairs.length} pairs`
+    };
   }
 
-  stop(dto: StopStrategyDto) {
-    const job = this.jobs[dto.jobId];
-    if (job) {
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-expect-error
-      clearInterval(job.timer);
-      delete this.jobs[dto.jobId];
-      this.logger.log(`Stopped job ${dto.jobId}`);
+  // Execute one trading tick
+  private async executeTradingTick(job: ActiveJob, exchange: Exchange) {
+    try {
+      const config = job.config;
+      const entryConditions = config.entry_conditions || config.bullish_entry_conditions || [];
+      const exitConditions = config.exit_conditions || config.bullish_exit_conditions || [];
+
+      for (const symbol of job.symbols) {
+        try {
+          // Fetch recent OHLCV data
+          const ohlcv = await exchange.fetchOHLCV(symbol, '1h', undefined, 100);
+          const closes = ohlcv.map(c => c[4] as number);
+          const currentPrice = closes[closes.length - 1];
+
+          // Calculate indicators
+          const indicators: IndicatorValues = {
+            close: currentPrice,
+            prevClose: closes[closes.length - 2],
+            rsi: this.calculateRSI(closes, 14) ?? undefined,
+            prevRsi: this.calculateRSI(closes.slice(0, -1), 14) ?? undefined,
+            smaFast: this.calculateSMA(closes, 20) ?? undefined,
+            smaSlow: this.calculateSMA(closes, 50) ?? undefined,
+            prevSmaFast: this.calculateSMA(closes.slice(0, -1), 20) ?? undefined,
+            prevSmaSlow: this.calculateSMA(closes.slice(0, -1), 50) ?? undefined,
+            bbPercent: this.calculateBBPercent(closes, 20, 2) ?? undefined,
+            prevBbPercent: this.calculateBBPercent(closes.slice(0, -1), 20, 2) ?? undefined,
+          };
+
+          const macd = this.calculateMACD(closes);
+          const prevMacd = this.calculateMACD(closes.slice(0, -1));
+          if (macd) {
+            indicators.macdLine = macd.line;
+            indicators.macdSignal = macd.signal;
+          }
+          if (prevMacd) {
+            indicators.prevMacdLine = prevMacd.line;
+            indicators.prevMacdSignal = prevMacd.signal;
+          }
+
+          const prevIndicators: IndicatorValues = {
+            close: indicators.prevClose!,
+            rsi: indicators.prevRsi,
+            smaFast: indicators.prevSmaFast,
+            smaSlow: indicators.prevSmaSlow,
+            macdLine: indicators.prevMacdLine,
+            macdSignal: indicators.prevMacdSignal,
+            bbPercent: indicators.prevBbPercent,
+          };
+
+          // Check for open position
+          const openTrade = await this.prisma.trade.findFirst({
+            where: {
+              strategyRunId: job.runId,
+              symbol,
+              side: 'buy',
+              status: 'filled',
+              exitPrice: null
+            }
+          });
+
+          if (!openTrade) {
+            // Check entry conditions
+            if (this.checkConditions(entryConditions, indicators, prevIndicators)) {
+              // Execute buy
+              const quantity = (config.orderSize || 1000) / currentPrice;
+              
+              const trade = await this.prisma.trade.create({
+                data: {
+                  userId: job.userId,
+                  strategyRunId: job.runId,
+                  symbol,
+                  side: 'buy',
+                  type: 'market',
+                  quantity,
+                  price: currentPrice,
+                  amount: quantity * currentPrice,
+                  entryPrice: currentPrice,
+                  status: 'filled',
+                  executedAt: new Date(),
+                  comment: 'Entry signal triggered'
+                }
+              });
+
+              job.stats.trades++;
+              this.logger.log(`[${job.id}] BUY ${symbol} @ ${currentPrice}`);
+            }
+          } else {
+            // Check exit conditions
+            if (this.checkConditions(exitConditions, indicators, prevIndicators)) {
+              // Execute sell
+              const profitLoss = (currentPrice - openTrade.entryPrice!) * openTrade.quantity;
+              const profitPercent = ((currentPrice - openTrade.entryPrice!) / openTrade.entryPrice!) * 100;
+
+              await this.prisma.trade.update({
+                where: { id: openTrade.id },
+                data: {
+                  exitPrice: currentPrice,
+                  profitLoss,
+                  profitPercent,
+                  comment: 'Exit signal triggered'
+                }
+              });
+
+              job.stats.trades++;
+              job.stats.profit += profitLoss;
+              if (profitLoss > 0) job.stats.wins++;
+
+              this.logger.log(`[${job.id}] SELL ${symbol} @ ${currentPrice} (P/L: ${profitLoss.toFixed(2)})`);
+
+              // Update run stats
+              await this.prisma.strategyRun.update({
+                where: { id: job.runId },
+                data: {
+                  totalTrades: job.stats.trades,
+                  winningTrades: job.stats.wins,
+                  totalProfit: job.stats.profit
+                }
+              });
+            }
+          }
+        } catch (err) {
+          this.logger.error(`[${job.id}] Error processing ${symbol}: ${err.message}`);
+        }
+      }
+
+      job.stats.lastCheck = new Date();
+    } catch (err) {
+      this.logger.error(`[${job.id}] Tick error: ${err.message}`);
+      job.status = 'error';
+      
+      await this.prisma.strategyRun.update({
+        where: { id: job.runId },
+        data: {
+          lastError: err.message,
+          errorCount: { increment: 1 }
+        }
+      });
     }
-    return { ok: true };
   }
 
-  list() {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    return { jobs: Object.values(this.jobs).map(({ timer, ...rest }) => rest) };
+  // Stop a running job
+  private stopJob(jobId: string) {
+    const job = this.jobs.get(jobId);
+    if (job) {
+      clearInterval(job.timer);
+      this.jobs.delete(jobId);
+    }
+  }
+
+  // Stop strategy run
+  async stopStrategy(userId: number, runId: number) {
+    const jobId = `run_${runId}`;
+    const job = this.jobs.get(jobId);
+
+    if (!job || job.userId !== userId) {
+      throw new BadRequestException('Strategy run not found');
+    }
+
+    this.stopJob(jobId);
+
+    // Update database
+    await this.prisma.strategyRun.update({
+      where: { id: runId },
+      data: {
+        status: 'stopped',
+        stoppedAt: new Date()
+      }
+    });
+
+    await this.prisma.strategy.update({
+      where: { id: job.strategyId },
+      data: { isActive: false }
+    });
+
+    return { success: true, message: 'Strategy stopped' };
+  }
+
+  // Get running strategies for user
+  async getRunningStrategies(userId: number) {
+    const runs = await this.prisma.strategyRun.findMany({
+      where: { userId, status: 'running' },
+      include: {
+        strategy: true,
+        trades: {
+          orderBy: { createdAt: 'desc' },
+          take: 10
+        }
+      }
+    });
+
+    return runs.map(run => {
+      const jobId = `run_${run.id}`;
+      const job = this.jobs.get(jobId);
+      
+      return {
+        ...run,
+        pairs: JSON.parse(run.pairs),
+        isLive: !!job,
+        lastCheck: job?.stats.lastCheck
+      };
+    });
+  }
+
+  // Get strategy run details with trades
+  async getRunDetails(userId: number, runId: number) {
+    const run = await this.prisma.strategyRun.findFirst({
+      where: { id: runId, userId },
+      include: {
+        strategy: true,
+        trades: {
+          orderBy: { createdAt: 'desc' }
+        }
+      }
+    });
+
+    if (!run) {
+      throw new BadRequestException('Run not found');
+    }
+
+    const jobId = `run_${run.id}`;
+    const job = this.jobs.get(jobId);
+
+    return {
+      ...run,
+      config: JSON.parse(run.config),
+      pairs: JSON.parse(run.pairs),
+      isLive: !!job,
+      liveStats: job?.stats
+    };
+  }
+
+  // List all jobs (for monitoring)
+  listJobs() {
+    return Array.from(this.jobs.values()).map(job => ({
+      id: job.id,
+      runId: job.runId,
+      strategyId: job.strategyId,
+      status: job.status,
+      symbols: job.symbols,
+      stats: job.stats
+    }));
   }
 }

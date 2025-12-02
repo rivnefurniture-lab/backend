@@ -7,12 +7,12 @@ export class CommentsService {
   constructor(private prisma: PrismaService) {}
 
   findAll(): Promise<Array<CommentDto>> {
-    return this.prisma.client.comment.findMany({
+    return this.prisma.comment.findMany({
       orderBy: { createdAt: 'desc' },
     });
   }
 
   create(data: CreateCommentDto) {
-    return this.prisma.client.comment.create({ data });
+    return this.prisma.comment.create({ data });
   }
 }
