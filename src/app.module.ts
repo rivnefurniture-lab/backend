@@ -5,7 +5,6 @@ import { SseModule } from './modules/sse/sse.module';
 import { ExchangeModule } from './modules/exchange/exchange.module';
 import { ConfigModule } from '@nestjs/config';
 import { HealthController } from './health.controller';
-import { BacktestModule } from './modules/backtest/backtest.module';
 
 @Module({
   imports: [
@@ -14,7 +13,6 @@ import { BacktestModule } from './modules/backtest/backtest.module';
     SseModule,
     ExchangeModule,
     AuthModule,
-    BacktestModule, // Only add backtest for now
   ],
   controllers: [HealthController],
 })
