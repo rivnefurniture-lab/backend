@@ -26,48 +26,60 @@ export class BacktestController {
   // Get ALL strategies - preset templates + user-saved from database
   @Get('strategies')
   async getAllStrategies() {
-    // Get preset strategies (always available)
-    const presetStrategies = await this.backtestService.getPresetStrategiesWithMetrics();
-    
-    // Get user-saved strategies from database
-    const dbStrategies = await this.prisma.strategy.findMany({
-      where: { isPublic: true },
-      orderBy: [
-        { lastBacktestProfit: 'desc' },
-        { updatedAt: 'desc' }
-      ],
-      include: {
-        user: {
-          select: { name: true, email: true }
-        }
+    try {
+      // Get preset strategies (always available)
+      const presetStrategies = await this.backtestService.getPresetStrategiesWithMetrics();
+      
+      // Try to get user-saved strategies from database
+      let userStrategies: any[] = [];
+      try {
+        const dbStrategies = await this.prisma.strategy.findMany({
+          where: { isPublic: true },
+          orderBy: [
+            { lastBacktestProfit: 'desc' },
+            { updatedAt: 'desc' }
+          ],
+          include: {
+            user: {
+              select: { name: true, email: true }
+            }
+          }
+        });
+
+        userStrategies = dbStrategies.map(s => ({
+          id: `db-${s.id}`,
+          name: s.name,
+          description: s.description,
+          category: s.category || 'Custom',
+          config: s.config ? JSON.parse(s.config) : {},
+          pairs: s.pairs ? JSON.parse(s.pairs) : [],
+          cagr: s.lastBacktestProfit || 0,
+          sharpe: s.lastBacktestSharpe || 0,
+          maxDD: s.lastBacktestDrawdown || 0,
+          winRate: s.lastBacktestWinRate || 0,
+          returns: {
+            daily: ((s.lastBacktestProfit || 0) / 365).toFixed(3),
+            weekly: ((s.lastBacktestProfit || 0) / 52).toFixed(2),
+            monthly: ((s.lastBacktestProfit || 0) / 12).toFixed(1),
+            yearly: s.lastBacktestProfit || 0,
+          },
+          isRealData: true,
+          isUserStrategy: true,
+          updatedAt: s.updatedAt.toISOString(),
+          createdBy: s.user?.name || 'User',
+        }));
+      } catch (dbError) {
+        console.error('Failed to load user strategies from DB:', dbError.message);
+        // Continue with just preset strategies
       }
-    });
 
-    const userStrategies = dbStrategies.map(s => ({
-      id: `db-${s.id}`,
-      name: s.name,
-      description: s.description,
-      category: s.category || 'Custom',
-      config: s.config ? JSON.parse(s.config) : {},
-      pairs: s.pairs ? JSON.parse(s.pairs) : [],
-      cagr: s.lastBacktestProfit || 0,
-      sharpe: s.lastBacktestSharpe || 0,
-      maxDD: s.lastBacktestDrawdown || 0,
-      winRate: s.lastBacktestWinRate || 0,
-      returns: {
-        daily: ((s.lastBacktestProfit || 0) / 365).toFixed(3),
-        weekly: ((s.lastBacktestProfit || 0) / 52).toFixed(2),
-        monthly: ((s.lastBacktestProfit || 0) / 12).toFixed(1),
-        yearly: s.lastBacktestProfit || 0,
-      },
-      isRealData: true,
-      isUserStrategy: true,
-      updatedAt: s.updatedAt.toISOString(),
-      createdBy: s.user?.name || 'User',
-    }));
-
-    // Combine preset strategies with user strategies
-    return [...presetStrategies, ...userStrategies];
+      // Combine preset strategies with user strategies
+      return [...presetStrategies, ...userStrategies];
+    } catch (error) {
+      console.error('Failed to load strategies:', error.message);
+      // Return at least the preset strategy templates
+      return this.backtestService.getStrategyTemplates();
+    }
   }
 
   // Get preset strategies with real calculated metrics

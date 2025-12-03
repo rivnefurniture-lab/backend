@@ -131,12 +131,23 @@ export class PaymentsService {
     return crypto.createHmac('md5', secretKey).update(signString).digest('hex');
   }
 
-  async createWayForPayOrder(planId: PlanId = 'starter', userId?: string) {
+  async createWayForPayOrder(planId: PlanId = 'starter', userEmail?: string) {
     const merchantAccount = process.env.WAYFORPAY_MERCHANT_ACCOUNT;
     const merchantDomain = process.env.WAYFORPAY_MERCHANT_DOMAIN;
+    const secretKey = process.env.WAYFORPAY_SECRET_KEY;
 
-    if (!merchantAccount || !merchantDomain) {
-      throw new BadRequestException('WayForPay not configured');
+    if (!merchantAccount || !merchantDomain || !secretKey) {
+      // Return demo info if not configured
+      return {
+        provider: 'wayforpay',
+        error: 'WayForPay not fully configured. Please add environment variables on Railway.',
+        requiredVars: ['WAYFORPAY_MERCHANT_ACCOUNT', 'WAYFORPAY_MERCHANT_DOMAIN', 'WAYFORPAY_SECRET_KEY'],
+        configured: {
+          merchantAccount: !!merchantAccount,
+          merchantDomain: !!merchantDomain,
+          secretKey: !!secretKey,
+        }
+      };
     }
 
     const amount = this.PRICE_MAP[planId];
