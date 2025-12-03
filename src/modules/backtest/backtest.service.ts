@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { RunBacktestDto, StrategyCondition } from './dto/backtest.dto';
 import { PrismaService } from '../../prisma/prisma.service';
+import * as ccxt from 'ccxt';
 
 export interface TradeEvent {
   timestamp: Date;
@@ -41,21 +42,38 @@ export interface OHLCV {
   low: number;
   close: number;
   volume: number;
-  rsi_14?: number;
-  sma_20?: number;
-  sma_50?: number;
-  macd?: number;
-  macd_signal?: number;
-  bb_upper?: number;
-  bb_lower?: number;
-  bb_percent?: number;
+}
+
+interface IndicatorData {
+  rsi: number[];
+  smaFast: number[];
+  smaSlow: number[];
+  emaFast: number[];
+  emaSlow: number[];
+  macdLine: number[];
+  macdSignal: number[];
+  bbPercent: number[];
+}
+
+interface Position {
+  symbol: string;
+  entryPrice: number;
+  entryTime: Date;
+  quantity: number;
+  entryIndex: number;
 }
 
 @Injectable()
 export class BacktestService {
   private readonly logger = new Logger(BacktestService.name);
+  private exchange: ccxt.Exchange;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) {
+    // Initialize Binance exchange (public API - no auth needed for OHLCV)
+    this.exchange = new ccxt.binance({
+      enableRateLimit: true,
+    });
+  }
 
   // Predefined strategy templates
   private readonly strategyTemplates = {
@@ -161,11 +179,61 @@ export class BacktestService {
     ];
   }
 
+  // Fetch REAL historical data from Binance
+  private async fetchHistoricalData(
+    symbol: string, 
+    timeframe: string, 
+    startDate: Date, 
+    endDate: Date
+  ): Promise<OHLCV[]> {
+    try {
+      const since = startDate.getTime();
+      const allData: OHLCV[] = [];
+      let currentSince = since;
+      const limit = 1000; // Binance max limit per request
+      
+      // Fetch data in chunks
+      while (currentSince < endDate.getTime()) {
+        const ohlcv = await this.exchange.fetchOHLCV(symbol, timeframe, currentSince, limit);
+        
+        if (!ohlcv || ohlcv.length === 0) break;
+        
+        for (const candle of ohlcv) {
+          const timestamp = new Date(candle[0] as number);
+          if (timestamp > endDate) break;
+          
+          allData.push({
+            timestamp,
+            open: candle[1] as number,
+            high: candle[2] as number,
+            low: candle[3] as number,
+            close: candle[4] as number,
+            volume: candle[5] as number,
+          });
+        }
+        
+        // Move to next batch
+        const lastTimestamp = ohlcv[ohlcv.length - 1][0] as number;
+        if (lastTimestamp <= currentSince) break;
+        currentSince = lastTimestamp + 1;
+        
+        // Rate limiting
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
+      this.logger.log(`Fetched ${allData.length} candles for ${symbol} ${timeframe}`);
+      return allData;
+    } catch (error) {
+      this.logger.error(`Failed to fetch historical data for ${symbol}: ${error.message}`);
+      throw error;
+    }
+  }
+
   // Calculate RSI
   private calculateRSI(closes: number[], period: number = 14): number[] {
     if (closes.length < period + 1) return [];
     
-    const rsi: number[] = [];
+    const rsi: number[] = new Array(period).fill(NaN);
     let gains = 0;
     let losses = 0;
     
@@ -198,7 +266,7 @@ export class BacktestService {
 
   // Calculate SMA
   private calculateSMA(values: number[], period: number): number[] {
-    const sma: number[] = [];
+    const sma: number[] = new Array(period - 1).fill(NaN);
     for (let i = period - 1; i < values.length; i++) {
       const sum = values.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0);
       sma.push(sum / period);
@@ -208,7 +276,9 @@ export class BacktestService {
 
   // Calculate EMA
   private calculateEMA(values: number[], period: number): number[] {
-    const ema: number[] = [];
+    if (values.length < period) return new Array(values.length).fill(NaN);
+    
+    const ema: number[] = new Array(period - 1).fill(NaN);
     const multiplier = 2 / (period + 1);
     
     // Start with SMA
@@ -232,13 +302,21 @@ export class BacktestService {
     const emaSlow = this.calculateEMA(closes, slow);
     
     const macdLine: number[] = [];
-    const offset = slow - fast;
-    
-    for (let i = 0; i < emaSlow.length; i++) {
-      macdLine.push(emaFast[i + offset] - emaSlow[i]);
+    for (let i = 0; i < closes.length; i++) {
+      if (isNaN(emaFast[i]) || isNaN(emaSlow[i])) {
+        macdLine.push(NaN);
+      } else {
+        macdLine.push(emaFast[i] - emaSlow[i]);
+      }
     }
     
-    const signalLine = this.calculateEMA(macdLine, signal);
+    // Calculate signal line from valid MACD values
+    const validMacd = macdLine.filter(v => !isNaN(v));
+    const signalLineValues = this.calculateEMA(validMacd, signal);
+    
+    // Align signal line with MACD
+    const signalLine: number[] = new Array(macdLine.length - validMacd.length).fill(NaN);
+    signalLine.push(...signalLineValues);
     
     return { macdLine, signalLine };
   }
@@ -246,64 +324,193 @@ export class BacktestService {
   // Calculate Bollinger Bands %B
   private calculateBBPercent(closes: number[], period = 20, deviation = 2): number[] {
     const sma = this.calculateSMA(closes, period);
-    const bbPercent: number[] = [];
+    const bbPercent: number[] = new Array(period - 1).fill(NaN);
     
     for (let i = period - 1; i < closes.length; i++) {
       const slice = closes.slice(i - period + 1, i + 1);
-      const mean = sma[i - period + 1];
+      const mean = sma[i];
       const variance = slice.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / period;
       const stdDev = Math.sqrt(variance);
       
       const upperBand = mean + deviation * stdDev;
       const lowerBand = mean - deviation * stdDev;
       
-      // %B = (Price - Lower Band) / (Upper Band - Lower Band)
-      const percentB = (closes[i] - lowerBand) / (upperBand - lowerBand || 1);
+      const percentB = (closes[i] - lowerBand) / ((upperBand - lowerBand) || 1);
       bbPercent.push(percentB);
     }
     
     return bbPercent;
   }
 
-  // Check if condition is met
-  private checkCondition(
-    currentValue: number,
-    previousValue: number | null,
-    condition: string,
-    targetValue: number
-  ): boolean {
-    switch (condition) {
-      case 'Less Than':
-        return currentValue < targetValue;
-      case 'Greater Than':
-        return currentValue > targetValue;
-      case 'Crossing Up':
-        if (previousValue === null) return false;
-        return previousValue <= targetValue && currentValue > targetValue;
-      case 'Crossing Down':
-        if (previousValue === null) return false;
-        return previousValue >= targetValue && currentValue < targetValue;
-      default:
-        return false;
-    }
+  // Calculate all indicators for the data
+  private calculateIndicators(closes: number[]): IndicatorData {
+    return {
+      rsi: this.calculateRSI(closes, 14),
+      smaFast: this.calculateSMA(closes, 20),
+      smaSlow: this.calculateSMA(closes, 50),
+      emaFast: this.calculateEMA(closes, 12),
+      emaSlow: this.calculateEMA(closes, 26),
+      ...this.calculateMACD(closes),
+      bbPercent: this.calculateBBPercent(closes, 20, 2),
+    };
   }
 
-  // Run a simulated backtest (for demo purposes)
+  // Check if entry/exit condition is met at a specific index
+  private checkConditionAtIndex(
+    conditions: StrategyCondition[],
+    indicators: IndicatorData,
+    closes: number[],
+    index: number
+  ): boolean {
+    if (!conditions || conditions.length === 0) return false;
+    
+    for (const cond of conditions) {
+      const subfields = cond.subfields || {};
+      const condition = subfields.Condition || subfields['MACD Trigger'];
+      const targetValue = subfields['Signal Value'];
+      
+      let currentValue: number | undefined;
+      let previousValue: number | undefined;
+      let compareValue: number | undefined;
+      let prevCompareValue: number | undefined;
+      
+      switch (cond.indicator) {
+        case 'RSI': {
+          const rsiLength = parseInt(subfields['RSI Length'] || '14');
+          const rsi = this.calculateRSI(closes.slice(0, index + 1), rsiLength);
+          currentValue = rsi[rsi.length - 1];
+          previousValue = rsi.length > 1 ? rsi[rsi.length - 2] : undefined;
+          break;
+        }
+        case 'MA': {
+          const fastPeriod = parseInt(subfields['Fast MA'] || '20');
+          const slowPeriod = parseInt(subfields['Slow MA'] || '50');
+          const maType = subfields['MA Type'] || 'SMA';
+          
+          const closesSlice = closes.slice(0, index + 1);
+          let fast: number[], slow: number[];
+          
+          if (maType === 'EMA') {
+            fast = this.calculateEMA(closesSlice, fastPeriod);
+            slow = this.calculateEMA(closesSlice, slowPeriod);
+          } else {
+            fast = this.calculateSMA(closesSlice, fastPeriod);
+            slow = this.calculateSMA(closesSlice, slowPeriod);
+          }
+          
+          currentValue = fast[fast.length - 1];
+          previousValue = fast.length > 1 ? fast[fast.length - 2] : undefined;
+          compareValue = slow[slow.length - 1];
+          prevCompareValue = slow.length > 1 ? slow[slow.length - 2] : undefined;
+          break;
+        }
+        case 'MACD': {
+          const preset = subfields['MACD Preset'] || '12,26,9';
+          const [fast, slow, signal] = preset.split(',').map(Number);
+          const macd = this.calculateMACD(closes.slice(0, index + 1), fast, slow, signal);
+          
+          currentValue = macd.macdLine[macd.macdLine.length - 1];
+          previousValue = macd.macdLine.length > 1 ? macd.macdLine[macd.macdLine.length - 2] : undefined;
+          compareValue = macd.signalLine[macd.signalLine.length - 1];
+          prevCompareValue = macd.signalLine.length > 1 ? macd.signalLine[macd.signalLine.length - 2] : undefined;
+          
+          // Check line trigger
+          const lineTrigger = subfields['Line Trigger'];
+          if (lineTrigger === 'Greater Than 0' && (currentValue ?? 0) <= 0) return false;
+          if (lineTrigger === 'Less Than 0' && (currentValue ?? 0) >= 0) return false;
+          break;
+        }
+        case 'BollingerBands': {
+          const bbPeriod = parseInt(subfields['BB% Period'] || '20');
+          const bbDeviation = parseFloat(subfields['Deviation'] || '2');
+          const bb = this.calculateBBPercent(closes.slice(0, index + 1), bbPeriod, bbDeviation);
+          
+          currentValue = bb[bb.length - 1];
+          previousValue = bb.length > 1 ? bb[bb.length - 2] : undefined;
+          break;
+        }
+        default:
+          continue;
+      }
+      
+      if (currentValue === undefined || isNaN(currentValue)) return false;
+      
+      // For MA and MACD, compare fast to slow/signal
+      if (cond.indicator === 'MA' || cond.indicator === 'MACD') {
+        if (compareValue === undefined || isNaN(compareValue)) return false;
+        
+        switch (condition) {
+          case 'Less Than':
+            if (currentValue >= compareValue) return false;
+            break;
+          case 'Greater Than':
+            if (currentValue <= compareValue) return false;
+            break;
+          case 'Crossing Up':
+            if (previousValue === undefined || prevCompareValue === undefined) return false;
+            if (!(previousValue <= prevCompareValue && currentValue > compareValue)) return false;
+            break;
+          case 'Crossing Down':
+            if (previousValue === undefined || prevCompareValue === undefined) return false;
+            if (!(previousValue >= prevCompareValue && currentValue < compareValue)) return false;
+            break;
+        }
+      } else {
+        // For RSI and BB, compare to target value
+        switch (condition) {
+          case 'Less Than':
+            if (currentValue >= targetValue) return false;
+            break;
+          case 'Greater Than':
+            if (currentValue <= targetValue) return false;
+            break;
+          case 'Crossing Up':
+            if (previousValue === undefined) return false;
+            if (!(previousValue <= targetValue && currentValue > targetValue)) return false;
+            break;
+          case 'Crossing Down':
+            if (previousValue === undefined) return false;
+            if (!(previousValue >= targetValue && currentValue < targetValue)) return false;
+            break;
+        }
+      }
+    }
+    
+    return true;
+  }
+
+  // Run backtest with REAL historical data
   async runBacktest(dto: RunBacktestDto): Promise<{
     status: string;
     message: string;
     metrics?: BacktestMetrics;
-    trades?: any[];
-    chartData?: any;
+    trades?: TradeEvent[];
+    chartData?: {
+      timestamps: string[];
+      balance: number[];
+      drawdown: number[];
+    };
   }> {
-    this.logger.log(`Running backtest: ${dto.strategy_name}`);
+    this.logger.log(`Running REAL backtest: ${dto.strategy_name}`);
     
-    const pairs = dto.pairs || ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'];
+    const pairs = dto.pairs || ['BTC/USDT'];
     const initialBalance = dto.initial_balance || 5000;
     const maxActiveDeals = dto.max_active_deals || 5;
     const baseOrderSize = dto.base_order_size || 1000;
+    const startDate = new Date(dto.start_date || Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const endDate = new Date(dto.end_date || Date.now());
     
-    // Generate simulated data for demo
+    // Determine which conditions to use
+    const entryConditions = dto.entry_conditions || dto.bullish_entry_conditions || [];
+    const exitConditions = dto.exit_conditions || dto.bullish_exit_conditions || [];
+    
+    if (entryConditions.length === 0) {
+      return {
+        status: 'error',
+        message: 'No entry conditions specified'
+      };
+    }
+    
     const trades: TradeEvent[] = [];
     let balance = initialBalance;
     let maxBalance = initialBalance;
@@ -312,87 +519,200 @@ export class BacktestService {
     let losses = 0;
     let grossProfit = 0;
     let grossLoss = 0;
-    
-    // Simulate some trades based on conditions
-    const numSimulatedTrades = Math.floor(Math.random() * 30) + 20;
-    const startDate = new Date(dto.start_date || Date.now() - 90 * 24 * 60 * 60 * 1000);
-    const endDate = new Date(dto.end_date || Date.now());
-    const timeRange = endDate.getTime() - startDate.getTime();
-    
     const balanceHistory: { timestamp: string; balance: number }[] = [];
+    const openPositions: Map<string, Position> = new Map();
+    let tradeId = 0;
+    let exposureBars = 0;
+    let totalBars = 0;
     
-    for (let i = 0; i < numSimulatedTrades; i++) {
-      const symbol = pairs[Math.floor(Math.random() * pairs.length)];
-      const entryTime = new Date(startDate.getTime() + (timeRange * i) / numSimulatedTrades);
-      const exitTime = new Date(entryTime.getTime() + Math.random() * 7 * 24 * 60 * 60 * 1000);
-      
-      const entryPrice = 30000 + Math.random() * 10000;
-      const priceChange = (Math.random() - 0.45) * 0.1; // Slight positive bias
-      const exitPrice = entryPrice * (1 + priceChange);
-      
-      const quantity = baseOrderSize / entryPrice;
-      const profitLoss = (exitPrice - entryPrice) * quantity * 0.999; // Include fees
-      
-      balance += profitLoss;
-      if (balance > maxBalance) maxBalance = balance;
-      const currentDrawdown = (maxBalance - balance) / maxBalance;
-      if (currentDrawdown > maxDrawdown) maxDrawdown = currentDrawdown;
-      
-      if (profitLoss > 0) {
-        wins++;
-        grossProfit += profitLoss;
-      } else {
-        losses++;
-        grossLoss += Math.abs(profitLoss);
+    // Process each trading pair
+    for (const symbol of pairs) {
+      try {
+        // Fetch REAL historical data
+        const data = await this.fetchHistoricalData(symbol, '1h', startDate, endDate);
+        
+        if (data.length < 50) {
+          this.logger.warn(`Not enough data for ${symbol}: ${data.length} candles`);
+          continue;
+        }
+        
+        const closes = data.map(d => d.close);
+        totalBars += data.length;
+        
+        // Iterate through each candle
+        for (let i = 50; i < data.length; i++) {
+          const candle = data[i];
+          const price = candle.close;
+          
+          // Check for open position in this symbol
+          const position = openPositions.get(symbol);
+          
+          if (position) {
+            exposureBars++;
+            
+            // Check exit conditions
+            if (this.checkConditionAtIndex(exitConditions, null as any, closes, i)) {
+              // Close position
+              const quantity = position.quantity;
+              const profitLoss = (price - position.entryPrice) * quantity;
+              const profitPercent = ((price - position.entryPrice) / position.entryPrice) * 100;
+              
+              balance += profitLoss;
+              
+              if (profitLoss > 0) {
+                wins++;
+                grossProfit += profitLoss;
+              } else {
+                losses++;
+                grossLoss += Math.abs(profitLoss);
+              }
+              
+              // Record exit trade
+              trades.push({
+                timestamp: candle.timestamp,
+                symbol,
+                action: 'SELL',
+                price,
+                quantity,
+                amount: price * quantity,
+                total_amount: baseOrderSize,
+                profit_percent: profitPercent,
+                move_from_entry: (price - position.entryPrice) / position.entryPrice,
+                trade_id: `trade-${position.entryIndex}`,
+                comment: `Exit: P/L ${profitPercent.toFixed(2)}%`,
+                market_state: 'neutral'
+              });
+              
+              openPositions.delete(symbol);
+              
+              // Update balance tracking
+              if (balance > maxBalance) maxBalance = balance;
+              const currentDrawdown = (maxBalance - balance) / maxBalance;
+              if (currentDrawdown > maxDrawdown) maxDrawdown = currentDrawdown;
+              
+              balanceHistory.push({
+                timestamp: candle.timestamp.toISOString(),
+                balance: Math.round(balance * 100) / 100
+              });
+            }
+          } else {
+            // Check entry conditions
+            if (openPositions.size < maxActiveDeals && 
+                balance >= baseOrderSize &&
+                this.checkConditionAtIndex(entryConditions, null as any, closes, i)) {
+              
+              // Open position
+              tradeId++;
+              const quantity = baseOrderSize / price;
+              
+              openPositions.set(symbol, {
+                symbol,
+                entryPrice: price,
+                entryTime: candle.timestamp,
+                quantity,
+                entryIndex: tradeId
+              });
+              
+              // Record entry trade
+              trades.push({
+                timestamp: candle.timestamp,
+                symbol,
+                action: 'BUY',
+                price,
+                quantity,
+                amount: baseOrderSize,
+                total_amount: baseOrderSize,
+                profit_percent: 0,
+                move_from_entry: 0,
+                trade_id: `trade-${tradeId}`,
+                comment: 'Entry signal',
+                market_state: 'neutral'
+              });
+            }
+          }
+        }
+        
+        // Close any remaining open positions at end
+        for (const [sym, pos] of openPositions) {
+          if (sym === symbol) {
+            const lastPrice = data[data.length - 1].close;
+            const profitLoss = (lastPrice - pos.entryPrice) * pos.quantity;
+            const profitPercent = ((lastPrice - pos.entryPrice) / pos.entryPrice) * 100;
+            
+            balance += profitLoss;
+            if (profitLoss > 0) {
+              wins++;
+              grossProfit += profitLoss;
+            } else {
+              losses++;
+              grossLoss += Math.abs(profitLoss);
+            }
+            
+            trades.push({
+              timestamp: data[data.length - 1].timestamp,
+              symbol,
+              action: 'SELL',
+              price: lastPrice,
+              quantity: pos.quantity,
+              amount: lastPrice * pos.quantity,
+              total_amount: baseOrderSize,
+              profit_percent: profitPercent,
+              move_from_entry: (lastPrice - pos.entryPrice) / pos.entryPrice,
+              trade_id: `trade-${pos.entryIndex}`,
+              comment: 'Position closed at backtest end',
+              market_state: 'neutral'
+            });
+            
+            openPositions.delete(sym);
+          }
+        }
+      } catch (error) {
+        this.logger.error(`Failed to backtest ${symbol}: ${error.message}`);
       }
-      
-      // Entry trade
-      trades.push({
-        timestamp: entryTime,
-        symbol,
-        action: 'BUY',
-        price: entryPrice,
-        quantity,
-        amount: baseOrderSize,
-        total_amount: baseOrderSize,
-        profit_percent: 0,
-        move_from_entry: 0,
-        trade_id: `trade-${i + 1}`,
-        comment: 'Entry signal',
-        market_state: Math.random() > 0.5 ? 'bullish' : 'bearish'
-      });
-      
-      // Exit trade
-      trades.push({
-        timestamp: exitTime,
-        symbol,
-        action: 'SELL',
-        price: exitPrice,
-        quantity,
-        amount: exitPrice * quantity,
-        total_amount: baseOrderSize,
-        profit_percent: priceChange * 100,
-        move_from_entry: priceChange,
-        trade_id: `trade-${i + 1}`,
-        comment: 'Exit signal',
-        market_state: Math.random() > 0.5 ? 'bullish' : 'bearish'
-      });
-      
-      balanceHistory.push({
-        timestamp: exitTime.toISOString(),
-        balance: Math.round(balance * 100) / 100
-      });
     }
     
+    // Calculate final metrics
     const totalTrades = wins + losses;
+    
+    if (totalTrades === 0) {
+      return {
+        status: 'success',
+        message: 'Backtest completed: No trades triggered with these conditions',
+        metrics: {
+          net_profit: 0,
+          net_profit_usd: '$0.00',
+          total_profit: 0,
+          total_profit_usd: '$0.00',
+          max_drawdown: 0,
+          max_realized_drawdown: 0,
+          sharpe_ratio: 0,
+          sortino_ratio: 0,
+          win_rate: 0,
+          total_trades: 0,
+          profit_factor: 0,
+          avg_profit_per_trade: 0,
+          yearly_return: 0,
+          exposure_time_frac: 0,
+        },
+        trades: [],
+        chartData: {
+          timestamps: [startDate.toISOString()],
+          balance: [initialBalance],
+          drawdown: [0]
+        }
+      };
+    }
+    
     const netProfit = (balance - initialBalance) / initialBalance;
-    const totalDays = timeRange / (24 * 60 * 60 * 1000);
+    const totalDays = (endDate.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000);
     const annualizedReturn = totalDays > 0 ? Math.pow(1 + netProfit, 365 / totalDays) - 1 : 0;
     
-    // Calculate Sharpe ratio (simplified)
-    const dailyReturns = balanceHistory.map((b, i) => 
-      i === 0 ? 0 : (b.balance - balanceHistory[i-1].balance) / balanceHistory[i-1].balance
-    ).slice(1);
+    // Calculate Sharpe ratio
+    const dailyReturns = balanceHistory.length > 1 
+      ? balanceHistory.map((b, i) => 
+          i === 0 ? 0 : (b.balance - balanceHistory[i-1].balance) / balanceHistory[i-1].balance
+        ).slice(1)
+      : [0];
     
     const avgReturn = dailyReturns.reduce((a, b) => a + b, 0) / (dailyReturns.length || 1);
     const stdDev = Math.sqrt(
@@ -421,25 +741,25 @@ export class BacktestService {
       profit_factor: grossLoss > 0 ? Math.round((grossProfit / grossLoss) * 100) / 100 : 'Infinity',
       avg_profit_per_trade: Math.round(((balance - initialBalance) / totalTrades) * 100) / 100,
       yearly_return: Math.round(annualizedReturn * 10000) / 100,
-      exposure_time_frac: Math.round(Math.random() * 50 + 20) // Placeholder
+      exposure_time_frac: totalBars > 0 ? Math.round((exposureBars / totalBars) * 10000) / 100 : 0
     };
     
     const chartData = {
       timestamps: balanceHistory.map(b => b.timestamp),
       balance: balanceHistory.map(b => b.balance),
       drawdown: balanceHistory.map((b, i) => {
-        const maxSoFar = Math.max(...balanceHistory.slice(0, i + 1).map(x => x.balance));
+        const maxSoFar = Math.max(initialBalance, ...balanceHistory.slice(0, i + 1).map(x => x.balance));
         return Math.round(((maxSoFar - b.balance) / maxSoFar) * 10000) / 100;
       })
     };
     
     return {
       status: 'success',
-      message: `Backtest completed: ${totalTrades} trades executed`,
+      message: `Backtest completed with REAL data: ${totalTrades} trades on ${pairs.length} pairs`,
       metrics,
       trades: trades.map(t => ({
         ...t,
-        timestamp: t.timestamp.toISOString(),
+        timestamp: t.timestamp instanceof Date ? t.timestamp.toISOString() : t.timestamp,
         price: Math.round(t.price * 100) / 100,
         amount: Math.round(t.amount * 100) / 100,
         profit_percent: Math.round(t.profit_percent * 100) / 100
@@ -574,4 +894,3 @@ export class BacktestService {
     return { success: true };
   }
 }
-
