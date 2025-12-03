@@ -2,10 +2,14 @@ import { Controller, Get, Post, Delete, Body, Param, UseGuards, Req } from '@nes
 import { BacktestService } from './backtest.service';
 import { RunBacktestDto } from './dto/backtest.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
+import { PrismaService } from '../../prisma/prisma.service';
 
 @Controller('backtest')
 export class BacktestController {
-  constructor(private readonly backtestService: BacktestService) {}
+  constructor(
+    private readonly backtestService: BacktestService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   // Get available indicators and their parameters
   @Get('indicators')
@@ -17,6 +21,46 @@ export class BacktestController {
   @Get('templates')
   getTemplates() {
     return this.backtestService.getStrategyTemplates();
+  }
+
+  // Get ALL public strategies with REAL metrics from database
+  @Get('strategies')
+  async getAllStrategies() {
+    const strategies = await this.prisma.strategy.findMany({
+      where: { isPublic: true },
+      orderBy: [
+        { lastBacktestProfit: 'desc' },
+        { updatedAt: 'desc' }
+      ],
+      include: {
+        user: {
+          select: { name: true, email: true }
+        }
+      }
+    });
+
+    return strategies.map(s => ({
+      id: s.id.toString(),
+      name: s.name,
+      description: s.description,
+      category: s.category || 'Custom',
+      config: s.config ? JSON.parse(s.config) : {},
+      pairs: s.pairs ? JSON.parse(s.pairs) : [],
+      // Real metrics from database
+      cagr: s.lastBacktestProfit || 0,
+      sharpe: s.lastBacktestSharpe || 0,
+      maxDD: s.lastBacktestDrawdown || 0,
+      winRate: s.lastBacktestWinRate || 0,
+      returns: {
+        daily: ((s.lastBacktestProfit || 0) / 365).toFixed(3),
+        weekly: ((s.lastBacktestProfit || 0) / 52).toFixed(2),
+        monthly: ((s.lastBacktestProfit || 0) / 12).toFixed(1),
+        yearly: s.lastBacktestProfit || 0,
+      },
+      isRealData: true,
+      updatedAt: s.updatedAt.toISOString(),
+      createdBy: s.user?.name || 'System',
+    }));
   }
 
   // Get preset strategies with real calculated metrics

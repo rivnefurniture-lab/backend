@@ -254,13 +254,14 @@ export class StrategiesService {
     maxDeals?: number;
     orderSize?: number;
     backtestResults?: any;
+    isPublic?: boolean;
   }) {
     const strategy = await this.prisma.strategy.create({
       data: {
         userId,
         name: data.name,
         description: data.description,
-        category: data.category,
+        category: data.category || 'Custom',
         config: JSON.stringify(data.config),
         pairs: JSON.stringify(data.pairs),
         maxDeals: data.maxDeals || 5,
@@ -269,6 +270,7 @@ export class StrategiesService {
         lastBacktestDrawdown: data.backtestResults?.max_drawdown,
         lastBacktestSharpe: data.backtestResults?.sharpe_ratio,
         lastBacktestWinRate: data.backtestResults?.win_rate,
+        isPublic: data.isPublic ?? true, // Default to public so it appears in strategies list
       }
     });
 
