@@ -123,6 +123,38 @@ export class RunBacktestDto {
   @ValidateNested({ each: true })
   @Type(() => StrategyCondition)
   bearish_exit_conditions?: StrategyCondition[];
+
+  // Risk Management
+  @IsOptional()
+  @IsNumber()
+  take_profit?: number;
+
+  @IsOptional()
+  @IsNumber()
+  stop_loss?: number;
+
+  @IsOptional()
+  trailing_stop?: boolean;
+
+  @IsOptional()
+  @IsNumber()
+  trailing_stop_percent?: number;
+
+  // Safety Orders (DCA)
+  @IsOptional()
+  use_safety_orders?: boolean;
+
+  @IsOptional()
+  @IsNumber()
+  safety_orders_count?: number;
+
+  @IsOptional()
+  @IsNumber()
+  safety_order_deviation?: number;
+
+  @IsOptional()
+  @IsNumber()
+  safety_order_volume_scale?: number;
 }
 
 export class SaveStrategyDto {

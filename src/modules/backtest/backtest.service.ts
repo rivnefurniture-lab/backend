@@ -678,12 +678,34 @@ export class BacktestService {
           if (position) {
             exposureBars++;
             
-            // Check exit conditions
-            if (this.checkConditionAtIndex(exitConditions, null as any, closes, i)) {
+            const profitPercent = ((price - position.entryPrice) / position.entryPrice) * 100;
+            
+            // Check Take Profit
+            const takeProfitHit = dto.take_profit && profitPercent >= dto.take_profit;
+            
+            // Check Stop Loss
+            const stopLossHit = dto.stop_loss && profitPercent <= -dto.stop_loss;
+            
+            // Check Trailing Stop
+            let trailingStopHit = false;
+            if (dto.trailing_stop && dto.trailing_stop_percent) {
+              const highSinceEntry = Math.max(...closes.slice(position.entryIndex, i + 1));
+              const drawdownFromHigh = ((highSinceEntry - price) / highSinceEntry) * 100;
+              trailingStopHit = profitPercent > 0 && drawdownFromHigh >= dto.trailing_stop_percent;
+            }
+            
+            // Check exit conditions (indicator or TP/SL)
+            const exitSignal = this.checkConditionAtIndex(exitConditions, null as any, closes, i);
+            
+            if (takeProfitHit || stopLossHit || trailingStopHit || exitSignal) {
               // Close position
               const quantity = position.quantity;
               const profitLoss = (price - position.entryPrice) * quantity;
-              const profitPercent = ((price - position.entryPrice) / position.entryPrice) * 100;
+              
+              let exitComment = 'Exit signal';
+              if (takeProfitHit) exitComment = `Take Profit hit at ${profitPercent.toFixed(2)}%`;
+              else if (stopLossHit) exitComment = `Stop Loss hit at ${profitPercent.toFixed(2)}%`;
+              else if (trailingStopHit) exitComment = `Trailing Stop hit at ${profitPercent.toFixed(2)}%`;
               
               balance += profitLoss;
               
@@ -707,7 +729,7 @@ export class BacktestService {
                 profit_percent: profitPercent,
                 move_from_entry: (price - position.entryPrice) / position.entryPrice,
                 trade_id: `trade-${position.entryIndex}`,
-                comment: `Exit: P/L ${profitPercent.toFixed(2)}%`,
+                comment: exitComment,
                 market_state: 'neutral'
               });
               
