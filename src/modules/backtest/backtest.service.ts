@@ -5,6 +5,8 @@ import * as ccxt from 'ccxt';
 
 export interface TradeEvent {
   timestamp: Date;
+  date: string;
+  time: string;
   symbol: string;
   action: string;
   price: number;
@@ -12,8 +14,20 @@ export interface TradeEvent {
   amount: number;
   total_amount: number;
   profit_percent: number;
+  profit_usd: number;
   move_from_entry: number;
   trade_id: string;
+  // Enhanced fields for transparency
+  reason: string;
+  indicatorProof: {
+    indicator: string;
+    value: number;
+    condition: string;
+    target: number;
+    triggered: boolean;
+  }[];
+  equity: number;
+  drawdown: number;
   comment: string;
   market_state: string;
 }
@@ -165,14 +179,24 @@ export class BacktestService {
       category: string;
       pairs: string[];
       config: Record<string, unknown>;
-      metrics: BacktestMetrics | null;
-      metricsCalculatedAt: string | null;
+      cagr: number;
+      sharpe: number;
+      maxDD: number;
+      winRate: number;
+      totalTrades: number;
+      returns: { daily: string; weekly: string; monthly: string; yearly: number };
+      isRealData: boolean;
+      isPreset: boolean;
+      updatedAt: string | null;
       needsCalculation: boolean;
     }> = [];
     
     for (const [id, template] of Object.entries(this.strategyTemplates)) {
       const cached = this.presetMetricsCache.get(id);
-      const isFresh = cached && (Date.now() - cached.calculatedAt.getTime()) < 24 * 60 * 60 * 1000; // 24 hours
+      const isFresh = !!(cached && (Date.now() - cached.calculatedAt.getTime()) < 60 * 60 * 1000); // 1 hour cache
+      
+      const metrics = isFresh ? cached.metrics : null;
+      const cagr = metrics?.yearly_return || metrics?.net_profit || 0;
       
       strategies.push({
         id,
@@ -188,8 +212,20 @@ export class BacktestService {
           bearish_entry_conditions: template.bearish_entry_conditions,
           bearish_exit_conditions: template.bearish_exit_conditions,
         },
-        metrics: isFresh ? cached.metrics : null,
-        metricsCalculatedAt: isFresh ? cached.calculatedAt.toISOString() : null,
+        cagr: cagr,
+        sharpe: metrics?.sharpe_ratio || 0,
+        maxDD: metrics?.max_drawdown || 0,
+        winRate: metrics?.win_rate || 0,
+        totalTrades: metrics?.total_trades || 0,
+        returns: {
+          daily: (cagr / 365).toFixed(3),
+          weekly: (cagr / 52).toFixed(2),
+          monthly: (cagr / 12).toFixed(1),
+          yearly: cagr,
+        },
+        isRealData: isFresh,
+        isPreset: true,
+        updatedAt: isFresh ? cached.calculatedAt.toISOString() : null,
         needsCalculation: !isFresh,
       });
     }
@@ -482,6 +518,112 @@ export class BacktestService {
     };
   }
 
+  // Build indicator proof array showing actual values at trade time
+  private buildIndicatorProof(
+    conditions: StrategyCondition[],
+    closes: number[],
+    index: number
+  ): { indicator: string; value: number; condition: string; target: number; triggered: boolean }[] {
+    const proof: { indicator: string; value: number; condition: string; target: number; triggered: boolean }[] = [];
+    
+    if (!conditions || conditions.length === 0) return proof;
+    
+    for (const cond of conditions) {
+      const subfields = cond.subfields || {};
+      const conditionType = subfields.Condition || subfields['MACD Trigger'] || '';
+      const targetValue = Number(subfields['Signal Value'] ?? 0);
+      
+      let currentValue = 0;
+      let indicatorName = cond.indicator;
+      
+      switch (cond.indicator) {
+        case 'RSI': {
+          const rsiLength = parseInt(String(subfields['RSI Length'] ?? 14));
+          const rsi = this.calculateRSI(closes.slice(0, index + 1), rsiLength);
+          currentValue = rsi[rsi.length - 1] || 0;
+          indicatorName = `RSI(${rsiLength})`;
+          break;
+        }
+        case 'MA': {
+          const fastPeriod = parseInt(String(subfields['Fast MA'] ?? 20));
+          const slowPeriod = parseInt(String(subfields['Slow MA'] ?? 50));
+          const maType = subfields['MA Type'] || 'SMA';
+          const closesSlice = closes.slice(0, index + 1);
+          
+          let fast: number[], slow: number[];
+          if (maType === 'EMA') {
+            fast = this.calculateEMA(closesSlice, fastPeriod);
+            slow = this.calculateEMA(closesSlice, slowPeriod);
+          } else {
+            fast = this.calculateSMA(closesSlice, fastPeriod);
+            slow = this.calculateSMA(closesSlice, slowPeriod);
+          }
+          
+          currentValue = fast[fast.length - 1] || 0;
+          const slowValue = slow[slow.length - 1] || 0;
+          indicatorName = `${maType}(${fastPeriod}) vs ${maType}(${slowPeriod})`;
+          
+          proof.push({
+            indicator: indicatorName,
+            value: Math.round(currentValue * 100) / 100,
+            condition: conditionType,
+            target: Math.round(slowValue * 100) / 100,
+            triggered: this.checkSingleCondition(currentValue, slowValue, conditionType)
+          });
+          continue;
+        }
+        case 'MACD': {
+          const preset = String(subfields['MACD Preset'] || '12,26,9');
+          const [fast, slow, signal] = preset.split(',').map(Number);
+          const macd = this.calculateMACD(closes.slice(0, index + 1), fast, slow, signal);
+          
+          currentValue = macd.macdLine[macd.macdLine.length - 1] || 0;
+          const signalValue = macd.macdSignal[macd.macdSignal.length - 1] || 0;
+          indicatorName = `MACD(${preset})`;
+          
+          proof.push({
+            indicator: indicatorName,
+            value: Math.round(currentValue * 10000) / 10000,
+            condition: conditionType,
+            target: Math.round(signalValue * 10000) / 10000,
+            triggered: this.checkSingleCondition(currentValue, signalValue, conditionType)
+          });
+          continue;
+        }
+        case 'BollingerBands': {
+          const bbPeriod = parseInt(String(subfields['BB% Period'] ?? 20));
+          const bbDeviation = parseFloat(String(subfields['Deviation'] ?? 2));
+          const bb = this.calculateBBPercent(closes.slice(0, index + 1), bbPeriod, bbDeviation);
+          
+          currentValue = bb[bb.length - 1] || 0;
+          indicatorName = `BB%(${bbPeriod},${bbDeviation})`;
+          break;
+        }
+      }
+      
+      proof.push({
+        indicator: indicatorName,
+        value: Math.round(currentValue * 100) / 100,
+        condition: conditionType,
+        target: targetValue,
+        triggered: this.checkSingleCondition(currentValue, targetValue, conditionType)
+      });
+    }
+    
+    return proof;
+  }
+
+  // Helper to check a single condition
+  private checkSingleCondition(value: number, target: number, condition: string): boolean {
+    switch (condition) {
+      case 'Less Than': return value < target;
+      case 'Greater Than': return value > target;
+      case 'Crossing Up': return true; // Already checked in main logic
+      case 'Crossing Down': return true; // Already checked in main logic
+      default: return false;
+    }
+  }
+
   // Check if entry/exit condition is met at a specific index
   private checkConditionAtIndex(
     conditions: StrategyCondition[],
@@ -702,10 +844,20 @@ export class BacktestService {
               const quantity = position.quantity;
               const profitLoss = (price - position.entryPrice) * quantity;
               
-              let exitComment = 'Exit signal';
-              if (takeProfitHit) exitComment = `Take Profit hit at ${profitPercent.toFixed(2)}%`;
-              else if (stopLossHit) exitComment = `Stop Loss hit at ${profitPercent.toFixed(2)}%`;
-              else if (trailingStopHit) exitComment = `Trailing Stop hit at ${profitPercent.toFixed(2)}%`;
+              // Determine exit reason
+              let exitReason = 'Indicator Exit Signal';
+              if (takeProfitHit) exitReason = `Take Profit (${dto.take_profit}%)`;
+              else if (stopLossHit) exitReason = `Stop Loss (${dto.stop_loss}%)`;
+              else if (trailingStopHit) exitReason = `Trailing Stop (${dto.trailing_stop_percent}%)`;
+              
+              // Build indicator proof for exit
+              const exitProof = this.buildIndicatorProof(exitConditions, closes, i);
+              if (takeProfitHit) {
+                exitProof.push({ indicator: 'Profit', value: profitPercent, condition: '>=', target: dto.take_profit!, triggered: true });
+              }
+              if (stopLossHit) {
+                exitProof.push({ indicator: 'Loss', value: profitPercent, condition: '<=', target: -dto.stop_loss!, triggered: true });
+              }
               
               balance += profitLoss;
               
@@ -717,28 +869,36 @@ export class BacktestService {
                 grossLoss += Math.abs(profitLoss);
               }
               
-              // Record exit trade
+              // Update balance tracking BEFORE recording trade
+              if (balance > maxBalance) maxBalance = balance;
+              const currentDrawdown = ((maxBalance - balance) / maxBalance) * 100;
+              if (currentDrawdown > maxDrawdown) maxDrawdown = currentDrawdown;
+              
+              // Record exit trade with full details
+              const exitDate = candle.timestamp;
               trades.push({
-                timestamp: candle.timestamp,
+                timestamp: exitDate,
+                date: exitDate.toISOString().split('T')[0],
+                time: exitDate.toISOString().split('T')[1].split('.')[0],
                 symbol,
                 action: 'SELL',
                 price,
                 quantity,
                 amount: price * quantity,
                 total_amount: baseOrderSize,
-                profit_percent: profitPercent,
+                profit_percent: Math.round(profitPercent * 100) / 100,
+                profit_usd: Math.round(profitLoss * 100) / 100,
                 move_from_entry: (price - position.entryPrice) / position.entryPrice,
                 trade_id: `trade-${position.entryIndex}`,
-                comment: exitComment,
+                reason: exitReason,
+                indicatorProof: exitProof,
+                equity: Math.round(balance * 100) / 100,
+                drawdown: Math.round(currentDrawdown * 100) / 100,
+                comment: `${exitReason}: P/L ${profitPercent.toFixed(2)}%`,
                 market_state: 'neutral'
               });
               
               openPositions.delete(symbol);
-              
-              // Update balance tracking
-              if (balance > maxBalance) maxBalance = balance;
-              const currentDrawdown = (maxBalance - balance) / maxBalance;
-              if (currentDrawdown > maxDrawdown) maxDrawdown = currentDrawdown;
               
               balanceHistory.push({
                 timestamp: candle.timestamp.toISOString(),
@@ -763,9 +923,18 @@ export class BacktestService {
                 entryIndex: tradeId
               });
               
-              // Record entry trade
+              // Build indicator proof for entry
+              const entryProof = this.buildIndicatorProof(entryConditions, closes, i);
+              
+              // Current drawdown from max
+              const currentDrawdown = maxBalance > 0 ? ((maxBalance - balance) / maxBalance) * 100 : 0;
+              
+              // Record entry trade with full details
+              const entryDate = candle.timestamp;
               trades.push({
-                timestamp: candle.timestamp,
+                timestamp: entryDate,
+                date: entryDate.toISOString().split('T')[0],
+                time: entryDate.toISOString().split('T')[1].split('.')[0],
                 symbol,
                 action: 'BUY',
                 price,
@@ -773,9 +942,14 @@ export class BacktestService {
                 amount: baseOrderSize,
                 total_amount: baseOrderSize,
                 profit_percent: 0,
+                profit_usd: 0,
                 move_from_entry: 0,
                 trade_id: `trade-${tradeId}`,
-                comment: 'Entry signal',
+                reason: 'Entry Signal - All indicators triggered',
+                indicatorProof: entryProof,
+                equity: Math.round(balance * 100) / 100,
+                drawdown: Math.round(currentDrawdown * 100) / 100,
+                comment: `Entry signal triggered`,
                 market_state: 'neutral'
               });
             }
@@ -798,17 +972,27 @@ export class BacktestService {
               grossLoss += Math.abs(profitLoss);
             }
             
+            const exitDate = data[data.length - 1].timestamp;
+            const currentDrawdown = maxBalance > 0 ? ((maxBalance - balance) / maxBalance) * 100 : 0;
+            
             trades.push({
-              timestamp: data[data.length - 1].timestamp,
+              timestamp: exitDate,
+              date: exitDate.toISOString().split('T')[0],
+              time: exitDate.toISOString().split('T')[1].split('.')[0],
               symbol,
               action: 'SELL',
               price: lastPrice,
               quantity: pos.quantity,
               amount: lastPrice * pos.quantity,
               total_amount: baseOrderSize,
-              profit_percent: profitPercent,
+              profit_percent: Math.round(profitPercent * 100) / 100,
+              profit_usd: Math.round(profitLoss * 100) / 100,
               move_from_entry: (lastPrice - pos.entryPrice) / pos.entryPrice,
               trade_id: `trade-${pos.entryIndex}`,
+              reason: 'Backtest End - Position Auto-Closed',
+              indicatorProof: [],
+              equity: Math.round(balance * 100) / 100,
+              drawdown: Math.round(currentDrawdown * 100) / 100,
               comment: 'Position closed at backtest end',
               market_state: 'neutral'
             });

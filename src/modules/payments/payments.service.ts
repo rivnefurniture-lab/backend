@@ -188,7 +188,7 @@ export class PaymentsService {
   }
 
   // ==================== DIRECT CRYPTO (Manual) ====================
-  async createCryptoPayment(planId: PlanId = 'starter') {
+  async createCryptoPayment(planId: PlanId = 'starter', userEmail?: string) {
     const amount = this.PRICE_MAP[planId];
     const walletAddress = process.env.CRYPTO_WALLET_ADDRESS;
 

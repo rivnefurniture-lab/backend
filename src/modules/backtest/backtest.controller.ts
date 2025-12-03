@@ -23,10 +23,14 @@ export class BacktestController {
     return this.backtestService.getStrategyTemplates();
   }
 
-  // Get ALL public strategies with REAL metrics from database
+  // Get ALL strategies - preset templates + user-saved from database
   @Get('strategies')
   async getAllStrategies() {
-    const strategies = await this.prisma.strategy.findMany({
+    // Get preset strategies (always available)
+    const presetStrategies = await this.backtestService.getPresetStrategiesWithMetrics();
+    
+    // Get user-saved strategies from database
+    const dbStrategies = await this.prisma.strategy.findMany({
       where: { isPublic: true },
       orderBy: [
         { lastBacktestProfit: 'desc' },
@@ -39,14 +43,13 @@ export class BacktestController {
       }
     });
 
-    return strategies.map(s => ({
-      id: s.id.toString(),
+    const userStrategies = dbStrategies.map(s => ({
+      id: `db-${s.id}`,
       name: s.name,
       description: s.description,
       category: s.category || 'Custom',
       config: s.config ? JSON.parse(s.config) : {},
       pairs: s.pairs ? JSON.parse(s.pairs) : [],
-      // Real metrics from database
       cagr: s.lastBacktestProfit || 0,
       sharpe: s.lastBacktestSharpe || 0,
       maxDD: s.lastBacktestDrawdown || 0,
@@ -58,9 +61,13 @@ export class BacktestController {
         yearly: s.lastBacktestProfit || 0,
       },
       isRealData: true,
+      isUserStrategy: true,
       updatedAt: s.updatedAt.toISOString(),
-      createdBy: s.user?.name || 'System',
+      createdBy: s.user?.name || 'User',
     }));
+
+    // Combine preset strategies with user strategies
+    return [...presetStrategies, ...userStrategies];
   }
 
   // Get preset strategies with real calculated metrics

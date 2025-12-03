@@ -19,22 +19,21 @@ type PlanId = 'starter' | 'pro' | 'elite';
 export class PaymentsController {
   constructor(private readonly payments: PaymentsService) {}
 
-  @UseGuards(JwtAuthGuard)
+  // Payment endpoints - no auth required (payment itself is the auth)
+  // User email is passed in body for order tracking
   @Post('binance/create')
-  createBinancePay(@Body() body: { planId?: PlanId }) {
-    return this.payments.createBinancePayOrder(body.planId || 'starter');
+  createBinancePay(@Body() body: { planId?: PlanId; email?: string }) {
+    return this.payments.createBinancePayOrder(body.planId || 'starter', body.email);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Post('wayforpay/create')
-  createWayForPay(@Body() body: { planId?: PlanId }) {
-    return this.payments.createWayForPayOrder(body.planId || 'starter');
+  createWayForPay(@Body() body: { planId?: PlanId; email?: string }) {
+    return this.payments.createWayForPayOrder(body.planId || 'starter', body.email);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Post('crypto/create')
-  createCrypto(@Body() body: { planId?: PlanId }) {
-    return this.payments.createCryptoPayment(body.planId || 'starter');
+  createCrypto(@Body() body: { planId?: PlanId; email?: string }) {
+    return this.payments.createCryptoPayment(body.planId || 'starter', body.email);
   }
 
   // Webhook endpoints (no auth guard - called by payment providers)
