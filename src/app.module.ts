@@ -3,11 +3,9 @@ import { AuthModule } from './modules/auth/auth.module';
 import { CommentsModule } from './modules/comments/comments.module';
 import { SseModule } from './modules/sse/sse.module';
 import { ExchangeModule } from './modules/exchange/exchange.module';
-import { StrategiesModule } from './modules/strategies/strategies.module';
-import { PaymentsModule } from './modules/payments/payments.module';
-import { BacktestModule } from './modules/backtest/backtest.module';
 import { ConfigModule } from '@nestjs/config';
 import { HealthController } from './health.controller';
+import { BacktestModule } from './modules/backtest/backtest.module';
 
 @Module({
   imports: [
@@ -15,10 +13,8 @@ import { HealthController } from './health.controller';
     CommentsModule,
     SseModule,
     ExchangeModule,
-    StrategiesModule,
-    PaymentsModule,
-    BacktestModule,
     AuthModule,
+    BacktestModule, // Only add backtest for now
   ],
   controllers: [HealthController],
 })
