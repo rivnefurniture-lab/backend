@@ -7,26 +7,151 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model User {
+  id                  Int       @id @default(autoincrement())
+  supabaseId          String?   @unique
+  email               String    @unique
+  passwordHash        String?
+  name                String?
+  phone               String?
+  country             String?
+  
+  // Exchange credentials (encrypted)
+  binanceApiKeyEnc    String?
+  binanceApiSecretEnc String?
+  binanceConnectedAt  DateTime?
+  
+  emailVerified       Boolean   @default(false)
+  emailVerifyToken    String?
+  createdAt           DateTime  @default(now())
+  googleId            String?   @unique
+  
+  // Subscription
+  subscriptionPlan    String?
+  subscriptionStatus  String?
+  subscriptionExpires DateTime?
+  
+  // Relations
+  strategies          Strategy[]
+  strategyRuns        StrategyRun[]
+  trades              Trade[]
+  backtestResults     BacktestResult[]
+}
+
+model Strategy {
+  id          Int      @id @default(autoincrement())
+  name        String
+  description String?
+  category    String?
+  config      String
+  pairs       String
+  maxDeals    Int      @default(5)
+  orderSize   Float    @default(1000)
+  
+  lastBacktestProfit    Float?
+  lastBacktestDrawdown  Float?
+  lastBacktestSharpe    Float?
+  lastBacktestWinRate   Float?
+  
+  isPublic    Boolean  @default(false)
+  isActive    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id])
+  runs        StrategyRun[]
+  backtests   BacktestResult[]
+}
+
+model StrategyRun {
+  id          Int       @id @default(autoincrement())
+  config      String
+  pairs       String
+  exchange    String    @default("binance")
+  status      String    @default("running")
+  startedAt   DateTime  @default(now())
+  stoppedAt   DateTime?
+  
+  initialBalance  Float
+  currentBalance  Float?
+  totalProfit     Float?
+  totalTrades     Int     @default(0)
+  winningTrades   Int     @default(0)
+  maxDrawdown     Float?
+  
+  lastError   String?
+  errorCount  Int       @default(0)
+  
+  userId      Int
+  user        User      @relation(fields: [userId], references: [id])
+  strategyId  Int
+  strategy    Strategy  @relation(fields: [strategyId], references: [id])
+  trades      Trade[]
+}
+
+model Trade {
+  id            Int      @id @default(autoincrement())
+  symbol        String
+  side          String
+  type          String   @default("market")
+  quantity      Float
+  price         Float
+  amount        Float
+  fee           Float?
+  
+  entryPrice    Float?
+  exitPrice     Float?
+  profitLoss    Float?
+  profitPercent Float?
+  
+  status        String   @default("pending")
+  orderId       String?
+  comment       String?
+  marketState   String?
+  createdAt     DateTime @default(now())
+  executedAt    DateTime?
+  
+  userId        Int
+  user          User     @relation(fields: [userId], references: [id])
+  strategyRunId Int?
+  strategyRun   StrategyRun? @relation(fields: [strategyRunId], references: [id])
+}
+
+model BacktestResult {
+  id          Int      @id @default(autoincrement())
+  name        String
+  config      String
+  pairs       String
+  startDate   DateTime
+  endDate     DateTime
+  initialBalance Float
+  
+  netProfit       Float
+  netProfitUsd    Float
+  maxDrawdown     Float
+  sharpeRatio     Float
+  sortinoRatio    Float
+  winRate         Float
+  totalTrades     Int
+  profitFactor    Float
+  yearlyReturn    Float
+  
+  chartData   String?
+  trades      String?
+  
+  createdAt   DateTime @default(now())
+  
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id])
+  strategyId  Int?
+  strategy    Strategy? @relation(fields: [strategyId], references: [id])
+}
+
 model Comment {
   id        Int      @id @default(autoincrement())
   author    String?
   text      String
   photo     String?
   createdAt DateTime @default(now())
-}
-
-model User {
-  id                  Int       @id @default(autoincrement())
-  email               String    @unique
-  passwordHash        String?
-  name                String?
-  phone               String?
-  country             String?
-  binanceApiKeyEnc    String?
-  binanceApiSecretEnc String?
-  binanceConnectedAt  DateTime?
-  emailVerified       Boolean   @default(false)
-  emailVerifyToken    String?
-  createdAt           DateTime  @default(now())
-  googleId            String?   @unique
 }
