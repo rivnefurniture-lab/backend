@@ -7,177 +7,26 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id                  Int       @id @default(autoincrement())
-  supabaseId          String?   @unique
-  email               String    @unique
-  passwordHash        String?
-  name                String?
-  phone               String?
-  country             String?
-  
-  // Exchange credentials (encrypted)
-  binanceApiKeyEnc    String?
-  binanceApiSecretEnc String?
-  binanceConnectedAt  DateTime?
-  
-  emailVerified       Boolean   @default(false)
-  emailVerifyToken    String?
-  createdAt           DateTime  @default(now())
-  googleId            String?   @unique
-  
-  // Subscription
-  subscriptionPlan    String?   // starter, pro, elite
-  subscriptionStatus  String?   // active, cancelled, expired
-  subscriptionExpires DateTime?
-  
-  // Relations
-  strategies          Strategy[]
-  strategyRuns        StrategyRun[]
-  trades              Trade[]
-  backtestResults     BacktestResult[]
-}
-
-model Strategy {
-  id          Int      @id @default(autoincrement())
-  name        String
-  description String?
-  category    String?
-  
-  // Strategy configuration (JSON)
-  config      String   // JSON: entry_conditions, exit_conditions, etc.
-  
-  // Settings
-  pairs       String   // JSON array of trading pairs
-  maxDeals    Int      @default(5)
-  orderSize   Float    @default(1000)
-  
-  // Stats from backtests
-  lastBacktestProfit    Float?
-  lastBacktestDrawdown  Float?
-  lastBacktestSharpe    Float?
-  lastBacktestWinRate   Float?
-  
-  // Meta
-  isPublic    Boolean  @default(false)
-  isActive    Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  
-  // Relations
-  userId      Int
-  user        User     @relation(fields: [userId], references: [id])
-  runs        StrategyRun[]
-  backtests   BacktestResult[]
-}
-
-model StrategyRun {
-  id          Int       @id @default(autoincrement())
-  
-  // Configuration snapshot
-  config      String    // JSON snapshot of strategy config at start
-  pairs       String    // JSON array
-  exchange    String    @default("binance")
-  
-  // Status
-  status      String    @default("running") // running, paused, stopped, error
-  startedAt   DateTime  @default(now())
-  stoppedAt   DateTime?
-  
-  // Performance
-  initialBalance  Float
-  currentBalance  Float?
-  totalProfit     Float?
-  totalTrades     Int     @default(0)
-  winningTrades   Int     @default(0)
-  maxDrawdown     Float?
-  
-  // Error tracking
-  lastError   String?
-  errorCount  Int       @default(0)
-  
-  // Relations
-  userId      Int
-  user        User      @relation(fields: [userId], references: [id])
-  strategyId  Int
-  strategy    Strategy  @relation(fields: [strategyId], references: [id])
-  trades      Trade[]
-}
-
-model Trade {
-  id            Int      @id @default(autoincrement())
-  
-  // Trade details
-  symbol        String
-  side          String   // buy, sell
-  type          String   @default("market") // market, limit
-  quantity      Float
-  price         Float
-  amount        Float    // quantity * price
-  fee           Float?
-  
-  // P&L
-  entryPrice    Float?
-  exitPrice     Float?
-  profitLoss    Float?
-  profitPercent Float?
-  
-  // Status
-  status        String   @default("pending") // pending, filled, cancelled, failed
-  orderId       String?  // Exchange order ID
-  
-  // Meta
-  comment       String?
-  marketState   String?  // bullish, bearish
-  createdAt     DateTime @default(now())
-  executedAt    DateTime?
-  
-  // Relations
-  userId        Int
-  user          User     @relation(fields: [userId], references: [id])
-  strategyRunId Int?
-  strategyRun   StrategyRun? @relation(fields: [strategyRunId], references: [id])
-}
-
-model BacktestResult {
-  id          Int      @id @default(autoincrement())
-  name        String
-  
-  // Configuration
-  config      String   // JSON: full strategy config
-  pairs       String   // JSON array
-  startDate   DateTime
-  endDate     DateTime
-  initialBalance Float
-  
-  // Results
-  netProfit       Float
-  netProfitUsd    Float
-  maxDrawdown     Float
-  sharpeRatio     Float
-  sortinoRatio    Float
-  winRate         Float
-  totalTrades     Int
-  profitFactor    Float
-  yearlyReturn    Float
-  
-  // Chart data (JSON)
-  chartData   String?
-  trades      String?  // JSON array of trades
-  
-  createdAt   DateTime @default(now())
-  
-  // Relations
-  userId      Int
-  user        User     @relation(fields: [userId], references: [id])
-  strategyId  Int?
-  strategy    Strategy? @relation(fields: [strategyId], references: [id])
-}
-
 model Comment {
   id        Int      @id @default(autoincrement())
   author    String?
   text      String
   photo     String?
   createdAt DateTime @default(now())
+}
+
+model User {
+  id                  Int       @id @default(autoincrement())
+  email               String    @unique
+  passwordHash        String?
+  name                String?
+  phone               String?
+  country             String?
+  binanceApiKeyEnc    String?
+  binanceApiSecretEnc String?
+  binanceConnectedAt  DateTime?
+  emailVerified       Boolean   @default(false)
+  emailVerifyToken    String?
+  createdAt           DateTime  @default(now())
+  googleId            String?   @unique
 }
