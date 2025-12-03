@@ -19,6 +19,18 @@ export class BacktestController {
     return this.backtestService.getStrategyTemplates();
   }
 
+  // Get preset strategies with real calculated metrics
+  @Get('preset-strategies')
+  async getPresetStrategies() {
+    return this.backtestService.getPresetStrategiesWithMetrics();
+  }
+
+  // Calculate real metrics for a specific preset strategy
+  @Get('preset-strategies/:id/calculate')
+  async calculatePresetStrategy(@Param('id') id: string) {
+    return this.backtestService.calculatePresetStrategyMetrics(id);
+  }
+
   // Run a backtest (requires auth)
   @UseGuards(JwtAuthGuard)
   @Post('run')

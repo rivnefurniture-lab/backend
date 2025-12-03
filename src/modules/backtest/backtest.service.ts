@@ -75,11 +75,44 @@ export class BacktestService {
     });
   }
 
-  // Predefined strategy templates
-  private readonly strategyTemplates = {
-    'rsi-oversold': {
-      name: 'RSI Oversold Bounce',
-      description: 'Buy when RSI < 30, Sell when RSI > 70',
+  // Predefined strategy templates with real conditions
+  private readonly strategyTemplates: Record<string, {
+    name: string;
+    description: string;
+    category: string;
+    pairs: string[];
+    entry_conditions?: any[];
+    exit_conditions?: any[];
+    bullish_entry_conditions?: any[];
+    bullish_exit_conditions?: any[];
+    bearish_entry_conditions?: any[];
+    bearish_exit_conditions?: any[];
+  }> = {
+    'golden-balance': {
+      name: 'Golden Balance',
+      description: 'A balanced strategy combining RSI momentum with Moving Average trend confirmation. Uses Bollinger Bands for dynamic exit points.',
+      category: 'Multi-Indicator / Trend & Mean Reversion',
+      pairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
+      bullish_entry_conditions: [
+        { indicator: 'RSI', subfields: { 'RSI Length': '28', Timeframe: '15m', Condition: 'Greater Than', 'Signal Value': 70 } },
+        { indicator: 'MA', subfields: { 'MA Type': 'SMA', 'Fast MA': '50', 'Slow MA': '200', Condition: 'Greater Than', Timeframe: '1h' } }
+      ],
+      bearish_entry_conditions: [
+        { indicator: 'RSI', subfields: { 'RSI Length': '21', Timeframe: '1h', Condition: 'Less Than', 'Signal Value': 20 } },
+        { indicator: 'MA', subfields: { 'MA Type': 'EMA', 'Fast MA': '20', 'Slow MA': '100', Condition: 'Less Than', Timeframe: '1h' } }
+      ],
+      bullish_exit_conditions: [
+        { indicator: 'BollingerBands', subfields: { 'BB% Period': '20', Deviation: '1', Condition: 'Less Than', Timeframe: '4h', 'Signal Value': 0.4 } }
+      ],
+      bearish_exit_conditions: [
+        { indicator: 'BollingerBands', subfields: { 'BB% Period': '50', Deviation: '1', Condition: 'Greater Than', Timeframe: '1d', 'Signal Value': 0.1 } }
+      ]
+    },
+    'rsi-edge': {
+      name: 'RSI Edge',
+      description: 'Mean-reversion strategy using RSI bands with ATR-based position sizing. Best for ranging markets.',
+      category: 'Technical / Mean Reversion',
+      pairs: ['BTC/USDT', 'ETH/USDT'],
       entry_conditions: [
         { indicator: 'RSI', subfields: { Timeframe: '1h', Condition: 'Less Than', 'Signal Value': 30, 'RSI Length': 14 } }
       ],
@@ -87,35 +120,23 @@ export class BacktestService {
         { indicator: 'RSI', subfields: { Timeframe: '1h', Condition: 'Greater Than', 'Signal Value': 70, 'RSI Length': 14 } }
       ]
     },
-    'ma-crossover': {
-      name: 'Moving Average Crossover',
-      description: 'Buy when Fast MA crosses above Slow MA',
-      entry_conditions: [
-        { indicator: 'MA', subfields: { Timeframe: '4h', Condition: 'Crossing Up', 'MA Type': 'SMA', 'Fast MA': 20, 'Slow MA': 50 } }
-      ],
-      exit_conditions: [
-        { indicator: 'MA', subfields: { Timeframe: '4h', Condition: 'Crossing Down', 'MA Type': 'SMA', 'Fast MA': 20, 'Slow MA': 50 } }
-      ]
-    },
-    'macd-momentum': {
-      name: 'MACD Momentum',
-      description: 'Trade MACD crossovers with trend filter',
+    'macd-trend': {
+      name: 'MACD Trend',
+      description: 'Trend-following strategy with MACD crossovers and trailing stops. Captures major market moves.',
+      category: 'Technical / Trend Following',
+      pairs: ['BTC/USDT', 'ETH/USDT'],
       bullish_entry_conditions: [
         { indicator: 'MACD', subfields: { Timeframe: '1d', 'MACD Preset': '12,26,9', 'MACD Trigger': 'Crossing Up', 'Line Trigger': 'Greater Than 0' } }
       ],
       bullish_exit_conditions: [
         { indicator: 'MACD', subfields: { Timeframe: '1d', 'MACD Preset': '12,26,9', 'MACD Trigger': 'Crossing Down' } }
-      ],
-      bearish_entry_conditions: [
-        { indicator: 'MACD', subfields: { Timeframe: '1d', 'MACD Preset': '12,26,9', 'MACD Trigger': 'Crossing Down', 'Line Trigger': 'Less Than 0' } }
-      ],
-      bearish_exit_conditions: [
-        { indicator: 'MACD', subfields: { Timeframe: '1d', 'MACD Preset': '12,26,9', 'MACD Trigger': 'Crossing Up' } }
       ]
     },
     'bb-mean-reversion': {
-      name: 'Bollinger Bands Mean Reversion',
-      description: 'Buy at lower band, Sell at upper band',
+      name: 'Bollinger Bounce',
+      description: 'Buys at lower Bollinger Band and sells at upper band. Works best in volatile but ranging markets.',
+      category: 'Volatility / Mean Reversion',
+      pairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
       entry_conditions: [
         { indicator: 'BollingerBands', subfields: { Timeframe: '1h', Condition: 'Less Than', 'Signal Value': 0, 'BB% Period': 20, Deviation: 2 } }
       ],
@@ -125,11 +146,117 @@ export class BacktestService {
     }
   };
 
+  // Cache for preset strategy metrics (to avoid recalculating every time)
+  private presetMetricsCache: Map<string, { metrics: BacktestMetrics; calculatedAt: Date }> = new Map();
+
   getStrategyTemplates() {
     return Object.entries(this.strategyTemplates).map(([id, template]) => ({
       id,
       ...template
     }));
+  }
+
+  // Get preset strategies with cached metrics (or placeholder if not yet calculated)
+  async getPresetStrategiesWithMetrics() {
+    const strategies: Array<{
+      id: string;
+      name: string;
+      description: string;
+      category: string;
+      pairs: string[];
+      config: Record<string, unknown>;
+      metrics: BacktestMetrics | null;
+      metricsCalculatedAt: string | null;
+      needsCalculation: boolean;
+    }> = [];
+    
+    for (const [id, template] of Object.entries(this.strategyTemplates)) {
+      const cached = this.presetMetricsCache.get(id);
+      const isFresh = cached && (Date.now() - cached.calculatedAt.getTime()) < 24 * 60 * 60 * 1000; // 24 hours
+      
+      strategies.push({
+        id,
+        name: template.name,
+        description: template.description,
+        category: template.category,
+        pairs: template.pairs,
+        config: {
+          entry_conditions: template.entry_conditions,
+          exit_conditions: template.exit_conditions,
+          bullish_entry_conditions: template.bullish_entry_conditions,
+          bullish_exit_conditions: template.bullish_exit_conditions,
+          bearish_entry_conditions: template.bearish_entry_conditions,
+          bearish_exit_conditions: template.bearish_exit_conditions,
+        },
+        metrics: isFresh ? cached.metrics : null,
+        metricsCalculatedAt: isFresh ? cached.calculatedAt.toISOString() : null,
+        needsCalculation: !isFresh,
+      });
+    }
+    
+    return strategies;
+  }
+
+  // Calculate real metrics for a specific preset strategy
+  async calculatePresetStrategyMetrics(strategyId: string): Promise<{
+    id: string;
+    name: string;
+    metrics: BacktestMetrics | null;
+    error?: string;
+  }> {
+    const template = this.strategyTemplates[strategyId];
+    
+    if (!template) {
+      return { id: strategyId, name: 'Unknown', metrics: null, error: 'Strategy not found' };
+    }
+    
+    try {
+      this.logger.log(`Calculating real metrics for preset strategy: ${strategyId}`);
+      
+      // Run backtest with real data
+      const result = await this.runBacktest({
+        strategy_name: template.name,
+        pairs: template.pairs,
+        initial_balance: 5000,
+        base_order_size: 1000,
+        max_active_deals: 3,
+        entry_conditions: template.entry_conditions,
+        exit_conditions: template.exit_conditions,
+        bullish_entry_conditions: template.bullish_entry_conditions,
+        bullish_exit_conditions: template.bullish_exit_conditions,
+        bearish_entry_conditions: template.bearish_entry_conditions,
+        bearish_exit_conditions: template.bearish_exit_conditions,
+      });
+      
+      if (result.status === 'success' && result.metrics) {
+        // Cache the results
+        this.presetMetricsCache.set(strategyId, {
+          metrics: result.metrics,
+          calculatedAt: new Date(),
+        });
+        
+        return {
+          id: strategyId,
+          name: template.name,
+          metrics: result.metrics,
+        };
+      }
+      
+      return {
+        id: strategyId,
+        name: template.name,
+        metrics: null,
+        error: result.message,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to calculate metrics for ${strategyId}: ${error.message}`);
+      return {
+        id: strategyId,
+        name: template.name,
+        metrics: null,
+        error: error.message,
+      };
+    }
   }
 
   getAvailableIndicators() {
@@ -318,7 +445,7 @@ export class BacktestService {
     const signalLine: number[] = new Array(macdLine.length - validMacd.length).fill(NaN);
     signalLine.push(...signalLineValues);
     
-    return { macdLine, signalLine };
+    return { macdLine, macdSignal: signalLine };
   }
 
   // Calculate Bollinger Bands %B
@@ -376,15 +503,15 @@ export class BacktestService {
       
       switch (cond.indicator) {
         case 'RSI': {
-          const rsiLength = parseInt(subfields['RSI Length'] || '14');
+          const rsiLength = parseInt(String(subfields['RSI Length'] ?? 14));
           const rsi = this.calculateRSI(closes.slice(0, index + 1), rsiLength);
           currentValue = rsi[rsi.length - 1];
           previousValue = rsi.length > 1 ? rsi[rsi.length - 2] : undefined;
           break;
         }
         case 'MA': {
-          const fastPeriod = parseInt(subfields['Fast MA'] || '20');
-          const slowPeriod = parseInt(subfields['Slow MA'] || '50');
+          const fastPeriod = parseInt(String(subfields['Fast MA'] ?? 20));
+          const slowPeriod = parseInt(String(subfields['Slow MA'] ?? 50));
           const maType = subfields['MA Type'] || 'SMA';
           
           const closesSlice = closes.slice(0, index + 1);
@@ -405,14 +532,14 @@ export class BacktestService {
           break;
         }
         case 'MACD': {
-          const preset = subfields['MACD Preset'] || '12,26,9';
+          const preset = String(subfields['MACD Preset'] || '12,26,9');
           const [fast, slow, signal] = preset.split(',').map(Number);
           const macd = this.calculateMACD(closes.slice(0, index + 1), fast, slow, signal);
           
           currentValue = macd.macdLine[macd.macdLine.length - 1];
           previousValue = macd.macdLine.length > 1 ? macd.macdLine[macd.macdLine.length - 2] : undefined;
-          compareValue = macd.signalLine[macd.signalLine.length - 1];
-          prevCompareValue = macd.signalLine.length > 1 ? macd.signalLine[macd.signalLine.length - 2] : undefined;
+          compareValue = macd.macdSignal[macd.macdSignal.length - 1];
+          prevCompareValue = macd.macdSignal.length > 1 ? macd.macdSignal[macd.macdSignal.length - 2] : undefined;
           
           // Check line trigger
           const lineTrigger = subfields['Line Trigger'];
@@ -421,8 +548,8 @@ export class BacktestService {
           break;
         }
         case 'BollingerBands': {
-          const bbPeriod = parseInt(subfields['BB% Period'] || '20');
-          const bbDeviation = parseFloat(subfields['Deviation'] || '2');
+          const bbPeriod = parseInt(String(subfields['BB% Period'] ?? 20));
+          const bbDeviation = parseFloat(String(subfields['Deviation'] ?? 2));
           const bb = this.calculateBBPercent(closes.slice(0, index + 1), bbPeriod, bbDeviation);
           
           currentValue = bb[bb.length - 1];
@@ -457,20 +584,21 @@ export class BacktestService {
         }
       } else {
         // For RSI and BB, compare to target value
+        const target = Number(targetValue ?? 0);
         switch (condition) {
           case 'Less Than':
-            if (currentValue >= targetValue) return false;
+            if (currentValue >= target) return false;
             break;
           case 'Greater Than':
-            if (currentValue <= targetValue) return false;
+            if (currentValue <= target) return false;
             break;
           case 'Crossing Up':
             if (previousValue === undefined) return false;
-            if (!(previousValue <= targetValue && currentValue > targetValue)) return false;
+            if (!(previousValue <= target && currentValue > target)) return false;
             break;
           case 'Crossing Down':
             if (previousValue === undefined) return false;
-            if (!(previousValue >= targetValue && currentValue < targetValue)) return false;
+            if (!(previousValue >= target && currentValue < target)) return false;
             break;
         }
       }
@@ -484,7 +612,7 @@ export class BacktestService {
     status: string;
     message: string;
     metrics?: BacktestMetrics;
-    trades?: TradeEvent[];
+    trades?: Array<Omit<TradeEvent, 'timestamp'> & { timestamp: string }>;
     chartData?: {
       timestamps: string[];
       balance: number[];
