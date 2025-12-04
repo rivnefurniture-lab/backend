@@ -16,7 +16,7 @@ model User {
   phone               String?
   country             String?
   
-  // Exchange credentials (encrypted)
+  // Exchange credentials (encrypted) - legacy, use ExchangeConnection instead
   binanceApiKeyEnc    String?
   binanceApiSecretEnc String?
   binanceConnectedAt  DateTime?
@@ -31,11 +31,42 @@ model User {
   subscriptionStatus  String?
   subscriptionExpires DateTime?
   
+  // Notification preferences
+  telegramId          String?
+  telegramEnabled     Boolean   @default(false)
+  emailNotifications  Boolean   @default(true)
+  notifyOnTrade       Boolean   @default(true)
+  notifyOnBacktest    Boolean   @default(true)
+  notifyOnBalance     Boolean   @default(true)
+  
+  // XP and achievements
+  xp                  Int       @default(0)
+  level               Int       @default(1)
+  achievements        String?   // JSON array of unlocked achievements
+  
   // Relations
   strategies          Strategy[]
   strategyRuns        StrategyRun[]
   trades              Trade[]
   backtestResults     BacktestResult[]
+  exchangeConnections ExchangeConnection[]
+}
+
+model ExchangeConnection {
+  id          Int       @id @default(autoincrement())
+  exchange    String    // binance, bybit, okx
+  apiKeyEnc   String    // Encrypted API key
+  secretEnc   String    // Encrypted secret
+  passwordEnc String?   // Encrypted passphrase (for OKX)
+  testnet     Boolean   @default(true)
+  isActive    Boolean   @default(true)
+  connectedAt DateTime  @default(now())
+  lastUsedAt  DateTime?
+  
+  userId      Int
+  user        User      @relation(fields: [userId], references: [id])
+  
+  @@unique([userId, exchange])
 }
 
 model Strategy {
@@ -154,4 +185,17 @@ model Comment {
   text      String
   photo     String?
   createdAt DateTime @default(now())
+}
+
+model RefundRequest {
+  id          Int       @id @default(autoincrement())
+  userId      Int
+  email       String
+  reason      String
+  amount      Float
+  status      String    @default("pending") // pending, approved, rejected, completed
+  paymentId   String?
+  adminNotes  String?
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
 }
