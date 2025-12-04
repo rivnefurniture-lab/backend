@@ -1,7 +1,6 @@
 // src/modules/payments/payments.service.ts
 import { Injectable, BadRequestException } from '@nestjs/common';
 import * as crypto from 'crypto';
-import Stripe from 'stripe';
 
 type PlanId = 'starter' | 'pro' | 'elite';
 
@@ -31,21 +30,6 @@ export class PaymentsService {
     pro: 29,
     elite: 79,
   };
-
-  private readonly STRIPE_PRICE_IDS: Record<PlanId, string> = {
-    starter: process.env.STRIPE_PRICE_STARTER || '',
-    pro: process.env.STRIPE_PRICE_PRO || '',
-    elite: process.env.STRIPE_PRICE_ELITE || '',
-  };
-
-  private stripe: Stripe | null = null;
-
-  constructor() {
-    const stripeKey = process.env.STRIPE_SECRET_KEY;
-    if (stripeKey) {
-      this.stripe = new Stripe(stripeKey, { apiVersion: '2025-05-28.basil' });
-    }
-  }
 
   // ==================== BINANCE PAY ====================
   private generateBinanceSignature(
@@ -87,8 +71,8 @@ export class PaymentsService {
       description: `Algotcha ${planId} subscription`,
       goodsDetails: [
         {
-          goodsType: '02', // Virtual goods
-          goodsCategory: 'Z000', // Others
+          goodsType: '02',
+          goodsCategory: 'Z000',
           referenceGoodsId: planId,
           goodsName: `Algotcha ${planId.charAt(0).toUpperCase() + planId.slice(1)} Plan`,
           goodsDetail: `Monthly subscription to Algotcha ${planId} trading strategies`,
@@ -99,7 +83,7 @@ export class PaymentsService {
       returnUrl: `${this.FRONTEND_URL}/pay-success?plan=${planId}`,
       cancelUrl: `${this.FRONTEND_URL}/pay-cancel`,
       webhookUrl: `${process.env.BACKEND_URL || 'http://localhost:8080'}/pay/binance/webhook`,
-      orderExpireTime: Date.now() + 3600000, // 1 hour
+      orderExpireTime: Date.now() + 3600000,
     };
 
     const bodyString = JSON.stringify(requestBody);
@@ -138,77 +122,12 @@ export class PaymentsService {
     };
   }
 
-  // ==================== STRIPE ====================
-  async createStripeCheckout(planId: PlanId = 'starter', userEmail?: string) {
-    if (!this.stripe) {
-      return {
-        provider: 'stripe',
-        error: 'Stripe not configured. Please add STRIPE_SECRET_KEY environment variable.',
-        configured: false,
-      };
-    }
-
-    const amount = this.PRICE_MAP[planId];
-    const priceId = this.STRIPE_PRICE_IDS[planId];
-
-    try {
-      // If we have a price ID (recurring subscription), use it
-      if (priceId) {
-        const session = await this.stripe.checkout.sessions.create({
-          mode: 'subscription',
-          line_items: [{ price: priceId, quantity: 1 }],
-          success_url: `${this.FRONTEND_URL}/pay-success?plan=${planId}&session_id={CHECKOUT_SESSION_ID}`,
-          cancel_url: `${this.FRONTEND_URL}/pay-cancel`,
-          customer_email: userEmail || undefined,
-          metadata: { planId },
-        });
-
-        return {
-          provider: 'stripe',
-          checkoutUrl: session.url,
-          sessionId: session.id,
-        };
-      }
-
-      // Otherwise create a one-time payment
-      const session = await this.stripe.checkout.sessions.create({
-        mode: 'payment',
-        line_items: [
-          {
-            price_data: {
-              currency: 'usd',
-              product_data: {
-                name: `Algotcha ${planId.charAt(0).toUpperCase() + planId.slice(1)} Plan`,
-                description: `Monthly subscription to Algotcha ${planId} trading strategies`,
-              },
-              unit_amount: amount * 100, // Stripe uses cents
-            },
-            quantity: 1,
-          },
-        ],
-        success_url: `${this.FRONTEND_URL}/pay-success?plan=${planId}&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${this.FRONTEND_URL}/pay-cancel`,
-        customer_email: userEmail || undefined,
-        metadata: { planId },
-      });
-
-      return {
-        provider: 'stripe',
-        checkoutUrl: session.url,
-        sessionId: session.id,
-      };
-    } catch (error) {
-      throw new BadRequestException(`Stripe error: ${error.message}`);
-    }
-  }
-
   // ==================== DIRECT CRYPTO (Manual) ====================
   async createCryptoPayment(planId: PlanId = 'starter', userEmail?: string) {
     const amount = this.PRICE_MAP[planId];
     const walletAddress = process.env.CRYPTO_WALLET_ADDRESS;
 
     if (!walletAddress) {
-      // Return demo wallet for testing
       return {
         provider: 'crypto',
         walletAddress: 'YOUR_USDT_TRC20_ADDRESS',
@@ -242,18 +161,5 @@ export class PaymentsService {
       body,
     );
     return signature === expectedSignature;
-  }
-
-  async verifyStripeWebhook(payload: Buffer, signature: string): Promise<Stripe.Event | null> {
-    if (!this.stripe) return null;
-    
-    const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
-    if (!endpointSecret) return null;
-
-    try {
-      return this.stripe.webhooks.constructEvent(payload, signature, endpointSecret);
-    } catch {
-      return null;
-    }
   }
 }
