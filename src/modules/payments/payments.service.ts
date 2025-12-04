@@ -1,6 +1,7 @@
 // src/modules/payments/payments.service.ts
 import { Injectable, BadRequestException } from '@nestjs/common';
 import * as crypto from 'crypto';
+import Stripe from 'stripe';
 
 type PlanId = 'starter' | 'pro' | 'elite';
 
@@ -30,6 +31,21 @@ export class PaymentsService {
     pro: 29,
     elite: 79,
   };
+
+  private readonly STRIPE_PRICE_IDS: Record<PlanId, string> = {
+    starter: process.env.STRIPE_PRICE_STARTER || '',
+    pro: process.env.STRIPE_PRICE_PRO || '',
+    elite: process.env.STRIPE_PRICE_ELITE || '',
+  };
+
+  private stripe: Stripe | null = null;
+
+  constructor() {
+    const stripeKey = process.env.STRIPE_SECRET_KEY;
+    if (stripeKey) {
+      this.stripe = new Stripe(stripeKey, { apiVersion: '2025-05-28.basil' });
+    }
+  }
 
   // ==================== BINANCE PAY ====================
   private generateBinanceSignature(
@@ -122,80 +138,68 @@ export class PaymentsService {
     };
   }
 
-  // ==================== WAYFORPAY ====================
-  private generateWayForPaySignature(params: string[]): string {
-    const secretKey = process.env.WAYFORPAY_SECRET_KEY;
-    if (!secretKey) throw new BadRequestException('WayForPay not configured');
-
-    const signString = params.join(';');
-    return crypto.createHmac('md5', secretKey).update(signString).digest('hex');
-  }
-
-  async createWayForPayOrder(planId: PlanId = 'starter', userEmail?: string) {
-    const merchantAccount = process.env.WAYFORPAY_MERCHANT_ACCOUNT;
-    const merchantDomain = process.env.WAYFORPAY_MERCHANT_DOMAIN;
-    const secretKey = process.env.WAYFORPAY_SECRET_KEY;
-
-    if (!merchantAccount || !merchantDomain || !secretKey) {
-      // Return demo info if not configured
+  // ==================== STRIPE ====================
+  async createStripeCheckout(planId: PlanId = 'starter', userEmail?: string) {
+    if (!this.stripe) {
       return {
-        provider: 'wayforpay',
-        error: 'WayForPay not fully configured. Please add environment variables on Railway.',
-        requiredVars: ['WAYFORPAY_MERCHANT_ACCOUNT', 'WAYFORPAY_MERCHANT_DOMAIN', 'WAYFORPAY_SECRET_KEY'],
-        configured: {
-          merchantAccount: !!merchantAccount,
-          merchantDomain: !!merchantDomain,
-          secretKey: !!secretKey,
-        }
+        provider: 'stripe',
+        error: 'Stripe not configured. Please add STRIPE_SECRET_KEY environment variable.',
+        configured: false,
       };
     }
 
     const amount = this.PRICE_MAP[planId];
-    const orderReference = `ALG${Date.now()}`;
-    const orderDate = Math.floor(Date.now() / 1000);
-    const productName = `Algotcha ${planId.charAt(0).toUpperCase() + planId.slice(1)} Plan`;
-    const productCount = 1;
-    const productPrice = amount;
+    const priceId = this.STRIPE_PRICE_IDS[planId];
 
-    // Signature string: merchantAccount;merchantDomainName;orderReference;orderDate;amount;currency;productName;productCount;productPrice
-    const signatureParams = [
-      merchantAccount,
-      merchantDomain,
-      orderReference,
-      orderDate.toString(),
-      amount.toString(),
-      'USD',
-      productName,
-      productCount.toString(),
-      productPrice.toString(),
-    ];
+    try {
+      // If we have a price ID (recurring subscription), use it
+      if (priceId) {
+        const session = await this.stripe.checkout.sessions.create({
+          mode: 'subscription',
+          line_items: [{ price: priceId, quantity: 1 }],
+          success_url: `${this.FRONTEND_URL}/pay-success?plan=${planId}&session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${this.FRONTEND_URL}/pay-cancel`,
+          customer_email: userEmail || undefined,
+          metadata: { planId },
+        });
 
-    const merchantSignature = this.generateWayForPaySignature(signatureParams);
+        return {
+          provider: 'stripe',
+          checkoutUrl: session.url,
+          sessionId: session.id,
+        };
+      }
 
-    // Build form data for redirect
-    const formData = {
-      merchantAccount,
-      merchantDomainName: merchantDomain,
-      merchantTransactionSecureType: 'AUTO',
-      merchantSignature,
-      orderReference,
-      orderDate,
-      amount,
-      currency: 'USD',
-      productName: [productName],
-      productCount: [productCount],
-      productPrice: [productPrice],
-      returnUrl: `${this.FRONTEND_URL}/pay-success?plan=${planId}`,
-      serviceUrl: `${process.env.BACKEND_URL || 'http://localhost:8080'}/pay/wayforpay/webhook`,
-      language: 'EN',
-    };
+      // Otherwise create a one-time payment
+      const session = await this.stripe.checkout.sessions.create({
+        mode: 'payment',
+        line_items: [
+          {
+            price_data: {
+              currency: 'usd',
+              product_data: {
+                name: `Algotcha ${planId.charAt(0).toUpperCase() + planId.slice(1)} Plan`,
+                description: `Monthly subscription to Algotcha ${planId} trading strategies`,
+              },
+              unit_amount: amount * 100, // Stripe uses cents
+            },
+            quantity: 1,
+          },
+        ],
+        success_url: `${this.FRONTEND_URL}/pay-success?plan=${planId}&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${this.FRONTEND_URL}/pay-cancel`,
+        customer_email: userEmail || undefined,
+        metadata: { planId },
+      });
 
-    return {
-      provider: 'wayforpay',
-      formAction: 'https://secure.wayforpay.com/pay',
-      formData,
-      orderId: orderReference,
-    };
+      return {
+        provider: 'stripe',
+        checkoutUrl: session.url,
+        sessionId: session.id,
+      };
+    } catch (error) {
+      throw new BadRequestException(`Stripe error: ${error.message}`);
+    }
   }
 
   // ==================== DIRECT CRYPTO (Manual) ====================
@@ -240,22 +244,16 @@ export class PaymentsService {
     return signature === expectedSignature;
   }
 
-  verifyWayForPayWebhook(body: any): boolean {
-    const secretKey = process.env.WAYFORPAY_SECRET_KEY;
-    if (!secretKey) return false;
+  async verifyStripeWebhook(payload: Buffer, signature: string): Promise<Stripe.Event | null> {
+    if (!this.stripe) return null;
+    
+    const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    if (!endpointSecret) return null;
 
-    const signatureParams = [
-      body.merchantAccount,
-      body.orderReference,
-      body.amount,
-      body.currency,
-      body.authCode,
-      body.cardPan,
-      body.transactionStatus,
-      body.reasonCode,
-    ];
-
-    const expectedSignature = this.generateWayForPaySignature(signatureParams);
-    return body.merchantSignature === expectedSignature;
+    try {
+      return this.stripe.webhooks.constructEvent(payload, signature, endpointSecret);
+    } catch {
+      return null;
+    }
   }
 }

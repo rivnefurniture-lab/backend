@@ -3,14 +3,12 @@ import {
   Controller,
   Post,
   Body,
-  UseGuards,
   Headers,
   Req,
   HttpCode,
+  RawBodyRequest,
 } from '@nestjs/common';
-import type { RawBodyRequest } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
-import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 import type { Request } from 'express';
 
 type PlanId = 'starter' | 'pro' | 'elite';
@@ -20,15 +18,14 @@ export class PaymentsController {
   constructor(private readonly payments: PaymentsService) {}
 
   // Payment endpoints - no auth required (payment itself is the auth)
-  // User email is passed in body for order tracking
   @Post('binance/create')
   createBinancePay(@Body() body: { planId?: PlanId; email?: string }) {
     return this.payments.createBinancePayOrder(body.planId || 'starter', body.email);
   }
 
-  @Post('wayforpay/create')
-  createWayForPay(@Body() body: { planId?: PlanId; email?: string }) {
-    return this.payments.createWayForPayOrder(body.planId || 'starter', body.email);
+  @Post('stripe/create')
+  createStripe(@Body() body: { planId?: PlanId; email?: string }) {
+    return this.payments.createStripeCheckout(body.planId || 'starter', body.email);
   }
 
   @Post('crypto/create')
@@ -58,28 +55,37 @@ export class PaymentsController {
     return { returnCode: 'SUCCESS', returnMessage: null };
   }
 
-  @Post('wayforpay/webhook')
+  @Post('stripe/webhook')
   @HttpCode(200)
-  async wayforpayWebhook(@Body() body: any) {
-    if (!this.payments.verifyWayForPayWebhook(body)) {
-      return {
-        orderReference: body.orderReference,
-        status: 'decline',
-        time: Math.floor(Date.now() / 1000),
-        signature: '',
-      };
+  async stripeWebhook(
+    @Headers('stripe-signature') signature: string,
+    @Req() req: RawBodyRequest<Request>,
+  ) {
+    const payload = req.rawBody;
+    if (!payload) {
+      return { error: 'No payload' };
     }
 
-    // TODO: Update user subscription status in database
-    console.log('WayForPay webhook received:', body);
+    const event = await this.payments.verifyStripeWebhook(payload, signature);
+    if (!event) {
+      return { error: 'Invalid signature' };
+    }
 
-    // Response signature
-    const responseTime = Math.floor(Date.now() / 1000);
-    return {
-      orderReference: body.orderReference,
-      status: 'accept',
-      time: responseTime,
-      signature: '', // TODO: Generate proper response signature
-    };
+    // Handle the event
+    switch (event.type) {
+      case 'checkout.session.completed':
+        const session = event.data.object;
+        console.log('Stripe checkout completed:', session);
+        // TODO: Update user subscription status in database
+        break;
+      case 'customer.subscription.created':
+      case 'customer.subscription.updated':
+        console.log('Stripe subscription updated:', event.data.object);
+        break;
+      default:
+        console.log(`Unhandled Stripe event type: ${event.type}`);
+    }
+
+    return { received: true };
   }
 }

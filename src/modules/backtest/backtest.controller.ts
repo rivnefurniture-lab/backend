@@ -1,5 +1,7 @@
-import { Controller, Get, Post, Delete, Body, Param, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Param, UseGuards, Req, Res } from '@nestjs/common';
+import { Response } from 'express';
 import { BacktestService } from './backtest.service';
+import { DataFetcherService } from './data-fetcher.service';
 import { RunBacktestDto } from './dto/backtest.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -8,6 +10,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 export class BacktestController {
   constructor(
     private readonly backtestService: BacktestService,
+    private readonly dataFetcher: DataFetcherService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -21,6 +24,12 @@ export class BacktestController {
   @Get('templates')
   getTemplates() {
     return this.backtestService.getStrategyTemplates();
+  }
+
+  // Get available symbols with data
+  @Get('symbols')
+  getAvailableSymbols() {
+    return this.dataFetcher.getAvailableSymbols();
   }
 
   // Get ALL strategies - preset templates + user-saved from database
@@ -70,14 +79,11 @@ export class BacktestController {
         }));
       } catch (dbError) {
         console.error('Failed to load user strategies from DB:', dbError.message);
-        // Continue with just preset strategies
       }
 
-      // Combine preset strategies with user strategies
       return [...presetStrategies, ...userStrategies];
     } catch (error) {
       console.error('Failed to load strategies:', error.message);
-      // Return at least the preset strategy templates
       return this.backtestService.getStrategyTemplates();
     }
   }
@@ -130,6 +136,49 @@ export class BacktestController {
   async getResult(@Req() req: any, @Param('id') id: string) {
     const userId = req.user?.sub || 1;
     return this.backtestService.getBacktestResult(parseInt(id), userId);
+  }
+
+  // Export trades as CSV
+  @Get('results/:id/export/csv')
+  async exportCSV(@Param('id') id: string, @Res() res: Response) {
+    const result = await this.backtestService.getBacktestResult(parseInt(id));
+    
+    if (!result || !result.trades) {
+      return res.status(404).json({ error: 'Backtest result not found' });
+    }
+    
+    const trades = result.trades;
+    
+    // Create CSV header
+    const headers = [
+      'Date', 'Time', 'Symbol', 'Action', 'Price', 'Quantity', 'Amount',
+      'P&L %', 'P&L $', 'Equity', 'Drawdown %', 'Reason', 'Indicators'
+    ];
+    
+    // Create CSV rows
+    const rows = trades.map((t: any) => [
+      t.date,
+      t.time,
+      t.symbol,
+      t.action,
+      t.price,
+      t.quantity?.toFixed(6) || '',
+      t.amount?.toFixed(2) || '',
+      t.profit_percent?.toFixed(2) || '0',
+      t.profit_usd?.toFixed(2) || '0',
+      t.equity?.toFixed(2) || '',
+      t.drawdown?.toFixed(2) || '0',
+      t.reason || '',
+      (t.indicatorProof || []).map((p: any) => 
+        `${p.indicator}: ${p.value} ${p.condition} ${p.target}`
+      ).join(' | ')
+    ].join(','));
+    
+    const csv = [headers.join(','), ...rows].join('\n');
+    
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename=backtest_${id}_trades.csv`);
+    return res.send(csv);
   }
 
   // Save backtest result as a reusable strategy
