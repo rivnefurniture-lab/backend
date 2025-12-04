@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Delete, Body, Param, UseGuards, Req, Res } from '@nestjs/common';
-import { Response } from 'express';
+import type { Response } from 'express';
 import { BacktestService } from './backtest.service';
 import { DataFetcherService } from './data-fetcher.service';
 import { RunBacktestDto } from './dto/backtest.dto';

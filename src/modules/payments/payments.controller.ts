@@ -8,7 +8,6 @@ import {
   HttpCode,
 } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
-import { Request } from 'express';
 
 type PlanId = 'starter' | 'pro' | 'elite';
 
@@ -34,7 +33,7 @@ export class PaymentsController {
     @Headers('BinancePay-Timestamp') timestamp: string,
     @Headers('BinancePay-Nonce') nonce: string,
     @Headers('BinancePay-Signature') signature: string,
-    @Req() req: Request,
+    @Req() req: any,
   ) {
     const body = JSON.stringify(req.body);
 
@@ -42,7 +41,6 @@ export class PaymentsController {
       return { returnCode: 'FAIL', returnMessage: 'Invalid signature' };
     }
 
-    // TODO: Update user subscription status in database
     console.log('Binance Pay webhook received:', req.body);
 
     return { returnCode: 'SUCCESS', returnMessage: null };
