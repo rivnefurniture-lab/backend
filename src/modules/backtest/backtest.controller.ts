@@ -142,4 +142,15 @@ export class BacktestController {
   async deleteResult(@Req() req: any, @Param('id') id: string) {
     return this.backtestService.deleteBacktestResult(parseInt(id), req.user?.sub || 1);
   }
+
+  // Data status and management
+  @Get('data/status')
+  getDataStatus() {
+    return this.backtestService.getDataStatus();
+  }
+
+  @Post('data/update')
+  triggerDataUpdate() {
+    return this.backtestService.triggerDataUpdate();
+  }
 }
