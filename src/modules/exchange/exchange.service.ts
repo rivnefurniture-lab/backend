@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, OnModuleInit } from '@nestjs/common';
 import { binance, bybit, Exchange, okx } from 'ccxt';
-import { PrismaService } from '../../prisma.service';
+import { PrismaService } from '../../prisma/prisma.service';
 import * as crypto from 'crypto';
 
 interface Connection {
