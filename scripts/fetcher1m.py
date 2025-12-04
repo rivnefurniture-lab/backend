@@ -468,9 +468,9 @@ if __name__ == "__main__":
     end_ts = exchange.parse8601(end_date)
     timeframes = ['1m', '5m', '15m', '1h', '4h', '1d']
 
-    # Increased from 4 to 8 for faster parallel downloads
-    # Binance allows 1200 req/min, with 8 workers we stay well under
-    max_workers = 8
+    # Reduced to 2 workers to prevent memory issues during indicator calculation
+    # Each symbol with indicators can use 2-4GB RAM
+    max_workers = 2
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(process_symbol, exchange, symbol, start_ts, end_ts, timeframes): symbol for symbol in symbols}
         for future in as_completed(futures):
