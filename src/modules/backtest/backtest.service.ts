@@ -829,7 +829,7 @@ print(json.dumps(result))
     };
     
     const folderName = folderMap[strategyId];
-    let metrics = null;
+    let metrics: Record<string, any> | null = null;
     
     if (folderName) {
       const metricsPath = path.join(this.staticDir, 'backtest_results', folderName, 'backtest_summary_metrics.csv');
@@ -840,12 +840,13 @@ print(json.dumps(result))
           if (lines.length >= 2) {
             const headers = lines[0].split(',');
             const values = lines[1].split(',');
-            metrics = {};
+            const metricsObj: Record<string, any> = {};
             headers.forEach((header, idx) => {
               const value = values[idx];
               const numValue = parseFloat(value);
-              (metrics as Record<string, any>)[header] = isNaN(numValue) ? value : numValue;
+              metricsObj[header] = isNaN(numValue) ? value : numValue;
             });
+            metrics = metricsObj;
           }
         } catch (e) {
           this.logger.warn(`Could not read metrics: ${(e as Error).message}`);
