@@ -15,11 +15,11 @@ export class PrismaService
   private isConnected = false;
   private connectionAttempts = 0;
   private readonly maxRetries = 5;
-  private readonly retryDelay = 3000; // 3 seconds
+  private readonly retryDelay = 2000; // 2 seconds (reduced from 3)
 
   constructor() {
     super({
-      log: ['error', 'warn'],
+      log: ['error'], // Only log errors, not warnings
       datasources: {
         db: {
           url: process.env.DATABASE_URL,
@@ -40,35 +40,40 @@ export class PrismaService
     while (this.connectionAttempts < this.maxRetries) {
       try {
         this.connectionAttempts++;
-        this.logger.log(
-          `🔄 Database connection attempt ${this.connectionAttempts}/${this.maxRetries}...`,
-        );
+        // Only log first attempt and success
+        if (this.connectionAttempts === 1) {
+          this.logger.log('🔄 Connecting to database...');
+        }
         await this.$connect();
         this.isConnected = true;
-        this.logger.log('✅ Database connected successfully');
+        this.logger.log('✅ Database connected');
         return;
       } catch (error: unknown) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
-        this.logger.warn(
-          `⚠️ Connection attempt ${this.connectionAttempts} failed: ${errorMessage}`,
-        );
+        // Only log on final failure or first few attempts
+        if (
+          this.connectionAttempts >= this.maxRetries ||
+          this.connectionAttempts <= 2
+        ) {
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          this.logger.warn(
+            `DB connection attempt ${this.connectionAttempts}/${this.maxRetries} failed`,
+          );
+          if (this.connectionAttempts >= this.maxRetries) {
+            this.logger.warn(`Last error: ${errorMessage.slice(0, 100)}`);
+          }
+        }
 
         if (this.connectionAttempts < this.maxRetries) {
-          this.logger.log(
-            `⏳ Retrying in ${this.retryDelay / 1000} seconds...`,
-          );
           await this.sleep(this.retryDelay);
         }
       }
     }
 
     this.logger.error(
-      `❌ Failed to connect to database after ${this.maxRetries} attempts`,
+      `❌ Database connection failed after ${this.maxRetries} attempts`,
     );
-    this.logger.warn(
-      '⚠️ App will continue without database - some features may not work',
-    );
+    this.logger.warn('⚠️ App will continue - some features may not work');
   }
 
   async onModuleDestroy(): Promise<void> {
