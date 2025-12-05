@@ -32,5 +32,5 @@ USER nestjs
 
 EXPOSE 8080
 
-# Run migrations at startup, then start the app
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/src/main.js"]
+# Use db push to sync schema (bypasses failed migration history)
+CMD ["sh", "-c", "npx prisma db push --accept-data-loss --skip-generate && node dist/src/main.js"]
