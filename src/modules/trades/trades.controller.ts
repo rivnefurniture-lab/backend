@@ -108,27 +108,79 @@ export class TradesController {
     const userId = await this.getUserId(req);
     
     try {
+      // Get all trades
       const trades = await this.prisma.trade.findMany({
         where: { userId },
       });
 
+      // Get today's trades
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      
+      const todayTrades = await this.prisma.trade.findMany({
+        where: {
+          userId,
+          createdAt: { gte: todayStart },
+        },
+      });
+
+      // Calculate stats
       const totalTrades = trades.length;
       const totalProfit = trades.reduce((sum, t) => sum + (t.profitLoss || 0), 0);
       const winningTrades = trades.filter(t => (t.profitLoss || 0) > 0).length;
       const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
+
+      // Calculate today's PnL
+      const todayProfit = todayTrades.reduce((sum, t) => sum + (t.profitLoss || 0), 0);
+      
+      // Get total invested today (sum of entry values)
+      const todayInvested = todayTrades.reduce((sum, t) => {
+        if (t.side === 'buy' && t.entryPrice) {
+          return sum + (t.entryPrice * t.quantity);
+        }
+        return sum;
+      }, 0);
+      
+      // Calculate PnL percentage
+      const todayPnLPercent = todayInvested > 0 ? (todayProfit / todayInvested) * 100 : 0;
+
+      // Get yesterday's trades for comparison
+      const yesterdayStart = new Date(todayStart);
+      yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+      
+      const yesterdayTrades = await this.prisma.trade.findMany({
+        where: {
+          userId,
+          createdAt: {
+            gte: yesterdayStart,
+            lt: todayStart,
+          },
+        },
+      });
+      
+      const yesterdayProfit = yesterdayTrades.reduce((sum, t) => sum + (t.profitLoss || 0), 0);
 
       return {
         totalTrades,
         totalProfit,
         winningTrades,
         winRate,
+        todayTrades: todayTrades.length,
+        todayProfit,
+        todayPnLPercent,
+        yesterdayProfit,
       };
     } catch (e) {
+      console.error('Error getting trade stats:', e);
       return {
         totalTrades: 0,
         totalProfit: 0,
         winningTrades: 0,
         winRate: 0,
+        todayTrades: 0,
+        todayProfit: 0,
+        todayPnLPercent: 0,
+        yesterdayProfit: 0,
       };
     }
   }
