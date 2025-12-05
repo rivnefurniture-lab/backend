@@ -65,6 +65,16 @@ export class ConditionSubfields {
   @IsOptional()
   @IsString()
   'PSAR Preset'?: string = '0.02,0.2';
+
+  // For IMMEDIATE indicator (always true)
+  @IsOptional()
+  @IsString()
+  action?: string;
+
+  // For TIME_ELAPSED indicator (exit after X minutes)
+  @IsOptional()
+  @IsNumber()
+  minutes?: number;
 }
 
 export class StrategyCondition {

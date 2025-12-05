@@ -47,6 +47,7 @@ export class BacktestService {
     price_change_active?: boolean;
     stop_loss_toggle?: boolean;
     conditions_active?: boolean;
+    timeBasedTrading?: boolean;
   }> = {
     'rsi-ma-bb-golden': {
       name: 'RSI+MA+BB Golden Strategy',
@@ -136,17 +137,18 @@ export class BacktestService {
       conditions_active: true
     },
     'test-always-trade': {
-      name: '🧪 TEST: Always Trade (1min)',
-      description: 'FOR TESTING ONLY - Enters immediately on any RSI value, exits after 2 candles. Use with TESTNET only!',
+      name: '🧪 TEST: Time-Based Trading',
+      description: 'FOR TESTING ONLY - Buys immediately, sells after 5 minutes, repeats. Use to verify order execution!',
       category: 'Testing',
       pairs: ['BTC/USDT'],
       entry_conditions: [
-        { indicator: 'RSI', subfields: { 'RSI Length': 2, Timeframe: '1m', Condition: 'Greater Than', 'Signal Value': 0 } }
+        { indicator: 'IMMEDIATE', subfields: { action: 'buy' } }
       ],
       exit_conditions: [
-        { indicator: 'RSI', subfields: { 'RSI Length': 2, Timeframe: '1m', Condition: 'Greater Than', 'Signal Value': 0 } }
+        { indicator: 'TIME_ELAPSED', subfields: { minutes: 5 } }
       ],
-      conditions_active: true
+      conditions_active: true,
+      timeBasedTrading: true
     }
   };
 

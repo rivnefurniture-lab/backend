@@ -224,6 +224,17 @@ export class StrategiesService {
       let prevCompareValue: number | undefined;
 
       switch (indicator) {
+        case 'IMMEDIATE':
+          // Always returns true - for immediate entry
+          this.logger.log('checkConditions: IMMEDIATE - always true');
+          continue; // Skip to next condition (or return true if no more)
+          
+        case 'TIME_ELAPSED':
+          // This is handled separately in executeTradingTick
+          // Always return true here - time check is done elsewhere
+          this.logger.log('checkConditions: TIME_ELAPSED - always true (time check done elsewhere)');
+          continue;
+          
         case 'RSI':
           currentValue = indicators.rsi;
           previousValue = prevIndicators?.rsi;
@@ -250,6 +261,8 @@ export class StrategiesService {
           previousValue = prevIndicators?.bbPercent;
           break;
         default:
+          // Unknown indicator - skip it
+          this.logger.log(`checkConditions: Unknown indicator ${indicator}, skipping`);
           continue;
       }
 
@@ -730,8 +743,27 @@ export class StrategiesService {
               this.logger.log(`[${job.id}] BUY ${symbol} @ ${actualPrice} (Order: ${orderId || 'FAILED'})`);
             }
           } else {
-            // Check exit conditions
-            if (this.checkConditions(exitConditions, indicators, prevIndicators)) {
+            // Check exit conditions - handle TIME_ELAPSED specially
+            const hasTimeElapsed = exitConditions.some((c: any) => c.indicator === 'TIME_ELAPSED');
+            let shouldExit = false;
+            
+            if (hasTimeElapsed) {
+              const timeCondition = exitConditions.find((c: any) => c.indicator === 'TIME_ELAPSED');
+              const minutesRequired = timeCondition?.subfields?.minutes || 5;
+              const entryTime = openTrade.executedAt || openTrade.createdAt;
+              const minutesSinceEntry = (Date.now() - new Date(entryTime).getTime()) / (1000 * 60);
+              
+              this.logger.log(`[${job.id}] TIME_ELAPSED check: ${minutesSinceEntry.toFixed(1)}min elapsed, need ${minutesRequired}min`);
+              
+              if (minutesSinceEntry >= minutesRequired) {
+                shouldExit = true;
+                this.logger.log(`[${job.id}] TIME_ELAPSED condition met - exiting position`);
+              }
+            } else {
+              shouldExit = this.checkConditions(exitConditions, indicators, prevIndicators);
+            }
+            
+            if (shouldExit) {
               // Execute sell - ACTUALLY PLACE ORDER ON EXCHANGE
               let orderId: string | undefined;
               let actualPrice = currentPrice;
