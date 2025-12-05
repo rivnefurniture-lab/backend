@@ -3,6 +3,16 @@ import { StartStrategyDto } from './dto/start-strategy.dto';
 import { StopStrategyDto } from './dto/stop-strategy.dto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Exchange } from 'ccxt';
+import { spawn } from 'child_process';
+import * as path from 'path';
+
+interface PythonSignalResult {
+  symbol: string;
+  signal: 'BUY' | 'SELL' | 'HOLD';
+  indicators: Record<string, any>;
+  reason: string;
+  error?: string;
+}
 
 interface ActiveJob {
   id: string;
@@ -109,6 +119,87 @@ export class StrategiesService {
       }
       throw new BadRequestException('Could not resolve user');
     }
+  }
+
+  // Call Python script for signal generation - mirrors backtest logic exactly
+  private async getPythonSignal(config: {
+    exchange: string;
+    symbol: string;
+    entry_conditions: any[];
+    exit_conditions: any[];
+    has_position: boolean;
+    position_entry_time?: string;
+  }): Promise<PythonSignalResult> {
+    return new Promise((resolve, reject) => {
+      const scriptPath = path.join(__dirname, '..', '..', '..', 'scripts', 'live_signals.py');
+      const configJson = JSON.stringify(config);
+      
+      const python = spawn('python3', [scriptPath, configJson]);
+      
+      let stdout = '';
+      let stderr = '';
+      
+      python.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+      
+      python.stderr.on('data', (data) => {
+        stderr += data.toString();
+        this.logger.debug(`Python signal: ${data.toString().trim()}`);
+      });
+      
+      python.on('close', (code) => {
+        if (code !== 0) {
+          this.logger.warn(`Python signal script exited with code ${code}: ${stderr}`);
+          // Return HOLD on error to avoid bad trades
+          resolve({
+            symbol: config.symbol,
+            signal: 'HOLD',
+            indicators: {},
+            reason: `Python error: ${stderr.substring(0, 100)}`,
+            error: stderr
+          });
+          return;
+        }
+        
+        try {
+          const result = JSON.parse(stdout.trim()) as PythonSignalResult;
+          resolve(result);
+        } catch (parseError) {
+          this.logger.error(`Failed to parse Python signal output: ${stdout}`);
+          resolve({
+            symbol: config.symbol,
+            signal: 'HOLD',
+            indicators: {},
+            reason: 'Failed to parse Python output',
+            error: stdout
+          });
+        }
+      });
+      
+      python.on('error', (error) => {
+        this.logger.error(`Python spawn error: ${error.message}`);
+        resolve({
+          symbol: config.symbol,
+          signal: 'HOLD',
+          indicators: {},
+          reason: `Spawn error: ${error.message}`,
+          error: error.message
+        });
+      });
+      
+      // Timeout after 30 seconds
+      setTimeout(() => {
+        python.kill();
+        resolve({
+          symbol: config.symbol,
+          signal: 'HOLD',
+          indicators: {},
+          reason: 'Python signal timeout',
+          error: 'Timeout'
+        });
+      }, 30000);
+    });
   }
 
   // Calculate RSI
@@ -621,75 +712,10 @@ export class StrategiesService {
       const config = job.config;
       const entryConditions = config.entry_conditions || config.bullish_entry_conditions || [];
       const exitConditions = config.exit_conditions || config.bullish_exit_conditions || [];
-      
-      // Get parameters from each condition type
-      const rsiCondition = entryConditions.find((c: any) => c.indicator === 'RSI');
-      const maCondition = entryConditions.find((c: any) => c.indicator === 'MA');
-      const bbCondition = exitConditions.find((c: any) => c.indicator === 'BollingerBands');
-      
-      // Extract timeframes (ideally different for each indicator)
-      const rsiTimeframe = rsiCondition?.subfields?.Timeframe || '15m';
-      const maTimeframe = maCondition?.subfields?.Timeframe || '1h';
-      const bbTimeframe = bbCondition?.subfields?.Timeframe || '4h';
-      
-      // Use the shortest timeframe for the main loop
-      const timeframe = rsiTimeframe;
-      
-      // Get indicator parameters from config
-      const rsiLength = rsiCondition?.subfields?.['RSI Length'] || 28;
-      const maFastPeriod = maCondition?.subfields?.['Fast MA'] || 50;
-      const maSlowPeriod = maCondition?.subfields?.['Slow MA'] || 200;
-      const bbPeriod = bbCondition?.subfields?.['BB% Period'] || 20;
-      const bbDeviation = bbCondition?.subfields?.['Deviation'] || 1;
-      
-      this.logger.log(`[${job.id}] Config: RSI(${rsiLength})@${rsiTimeframe}, MA(${maFastPeriod}/${maSlowPeriod})@${maTimeframe}, BB(${bbPeriod},${bbDeviation})@${bbTimeframe}`);
 
       for (const symbol of job.symbols) {
         try {
-          // Fetch recent OHLCV data with configured timeframe
-          this.logger.log(`[${job.id}] Fetching ${symbol} ${timeframe} data...`);
-          const ohlcv = await exchange.fetchOHLCV(symbol, timeframe, undefined, 100);
-          const closes = ohlcv.map(c => c[4] as number);
-          const currentPrice = closes[closes.length - 1];
-
-          // Calculate indicators with configured periods from strategy config
-          const indicators: IndicatorValues = {
-            close: currentPrice,
-            prevClose: closes[closes.length - 2],
-            rsi: this.calculateRSI(closes, rsiLength) ?? undefined,
-            prevRsi: this.calculateRSI(closes.slice(0, -1), rsiLength) ?? undefined,
-            smaFast: this.calculateSMA(closes, maFastPeriod) ?? undefined,
-            smaSlow: this.calculateSMA(closes, maSlowPeriod) ?? undefined,
-            prevSmaFast: this.calculateSMA(closes.slice(0, -1), maFastPeriod) ?? undefined,
-            prevSmaSlow: this.calculateSMA(closes.slice(0, -1), maSlowPeriod) ?? undefined,
-            bbPercent: this.calculateBBPercent(closes, bbPeriod, bbDeviation) ?? undefined,
-            prevBbPercent: this.calculateBBPercent(closes.slice(0, -1), bbPeriod, bbDeviation) ?? undefined,
-          };
-          
-          this.logger.log(`[${job.id}] ${symbol} Price: $${currentPrice.toFixed(2)}, RSI(${rsiLength}): ${indicators.rsi?.toFixed(2)}, SMA(${maFastPeriod}/${maSlowPeriod}): ${indicators.smaFast?.toFixed(2)}/${indicators.smaSlow?.toFixed(2)}, BB%B: ${indicators.bbPercent?.toFixed(3)}`);
-
-          const macd = this.calculateMACD(closes);
-          const prevMacd = this.calculateMACD(closes.slice(0, -1));
-          if (macd) {
-            indicators.macdLine = macd.line;
-            indicators.macdSignal = macd.signal;
-          }
-          if (prevMacd) {
-            indicators.prevMacdLine = prevMacd.line;
-            indicators.prevMacdSignal = prevMacd.signal;
-          }
-
-          const prevIndicators: IndicatorValues = {
-            close: indicators.prevClose!,
-            rsi: indicators.prevRsi,
-            smaFast: indicators.prevSmaFast,
-            smaSlow: indicators.prevSmaSlow,
-            macdLine: indicators.prevMacdLine,
-            macdSignal: indicators.prevMacdSignal,
-            bbPercent: indicators.prevBbPercent,
-          };
-
-          // Check for open position
+          // Check for open position first
           const openTrade = await this.prisma.trade.findFirst({
             where: {
               strategyRunId: job.runId,
@@ -700,17 +726,27 @@ export class StrategiesService {
             }
           });
 
-          if (!openTrade) {
-            // Check entry conditions
-            this.logger.log(`[${job.id}] Checking entry conditions...`);
-            this.logger.log(`[${job.id}] Entry conditions: ${JSON.stringify(entryConditions)}`);
-            this.logger.log(`[${job.id}] Indicators: RSI=${indicators.rsi?.toFixed(2)}, Price=${indicators.close.toFixed(2)}`);
-            
-            const entryMet = this.checkConditions(entryConditions, indicators, prevIndicators);
-            this.logger.log(`[${job.id}] Entry conditions met: ${entryMet}`);
-            
-            if (entryMet) {
-              // Execute buy - ACTUALLY PLACE ORDER ON EXCHANGE
+          // Use Python signal generator for exact backtest match
+          this.logger.log(`[${job.id}] Getting Python signal for ${symbol}...`);
+          
+          const signalConfig = {
+            exchange: job.exchange,
+            symbol,
+            entry_conditions: entryConditions,
+            exit_conditions: exitConditions,
+            has_position: !!openTrade,
+            position_entry_time: openTrade?.executedAt?.toISOString() || openTrade?.createdAt?.toISOString(),
+          };
+          
+          const pythonSignal = await this.getPythonSignal(signalConfig);
+          this.logger.log(`[${job.id}] Python signal: ${pythonSignal.signal} (${pythonSignal.reason})`);
+          
+          // Get current price for order execution
+          const ticker = await exchange.fetchTicker(symbol);
+          const currentPrice = ticker.last || ticker.close || 0;
+
+          if (!openTrade && pythonSignal.signal === 'BUY') {
+            // Entry signal from Python - Execute buy
               // Binance minimum notional is ~$5-10, enforce $10 minimum
               const effectiveOrderSize = Math.max(job.orderSize, 10);
               if (job.orderSize < 10) {
@@ -770,29 +806,8 @@ export class StrategiesService {
                   totalProfit: job.stats.profit
                 }
               });
-            }
-          } else {
-            // Check exit conditions - handle TIME_ELAPSED specially
-            const hasTimeElapsed = exitConditions.some((c: any) => c.indicator === 'TIME_ELAPSED');
-            let shouldExit = false;
-            
-            if (hasTimeElapsed) {
-              const timeCondition = exitConditions.find((c: any) => c.indicator === 'TIME_ELAPSED');
-              const minutesRequired = timeCondition?.subfields?.minutes || 5;
-              const entryTime = openTrade.executedAt || openTrade.createdAt;
-              const minutesSinceEntry = (Date.now() - new Date(entryTime).getTime()) / (1000 * 60);
-              
-              this.logger.log(`[${job.id}] TIME_ELAPSED check: ${minutesSinceEntry.toFixed(1)}min elapsed, need ${minutesRequired}min`);
-              
-              if (minutesSinceEntry >= minutesRequired) {
-                shouldExit = true;
-                this.logger.log(`[${job.id}] TIME_ELAPSED condition met - exiting position`);
-              }
-            } else {
-              shouldExit = this.checkConditions(exitConditions, indicators, prevIndicators);
-            }
-            
-            if (shouldExit) {
+          } else if (openTrade && pythonSignal.signal === 'SELL') {
+            // Exit signal from Python
               // Execute sell - ACTUALLY PLACE ORDER ON EXCHANGE
               let orderId: string | undefined;
               let actualPrice = currentPrice;
