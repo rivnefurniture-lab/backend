@@ -3,9 +3,10 @@ import { Request } from 'express';
 import { StrategiesService } from './strategies.service';
 import { ExchangeService } from '../exchange/exchange.service';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
+import { PrismaService } from '../../prisma/prisma.service';
 
 interface JwtUser {
-  sub: number;
+  sub: string; // Supabase uses UUID strings
   email?: string;
 }
 
@@ -18,10 +19,64 @@ export class StrategiesController {
   constructor(
     private readonly strategies: StrategiesService,
     private readonly exchange: ExchangeService,
+    private readonly prisma: PrismaService,
   ) {}
 
-  private getUserId(req: AuthenticatedRequest): number {
-    return req.user?.sub || 1;
+  // Get the supabase UUID from JWT
+  private getSupabaseId(req: AuthenticatedRequest): string {
+    return req.user?.sub || '';
+  }
+  
+  private getEmail(req: AuthenticatedRequest): string {
+    return req.user?.email || '';
+  }
+  
+  // Find or create user and return their DB ID
+  private async getUserId(req: AuthenticatedRequest): Promise<number> {
+    const supabaseId = this.getSupabaseId(req);
+    const email = this.getEmail(req);
+    
+    try {
+      // First try to find by supabaseId
+      let user = await this.prisma.user.findFirst({
+        where: { supabaseId },
+        select: { id: true },
+      });
+      
+      // If not found, try by email
+      if (!user && email) {
+        user = await this.prisma.user.findUnique({
+          where: { email },
+          select: { id: true },
+        });
+        
+        // Update supabaseId if found by email
+        if (user && supabaseId) {
+          await this.prisma.user.update({
+            where: { id: user.id },
+            data: { supabaseId },
+          });
+        }
+      }
+      
+      // If still not found, create new user
+      if (!user && email) {
+        user = await this.prisma.user.create({
+          data: {
+            email,
+            supabaseId,
+            xp: 0,
+            level: 1,
+          },
+          select: { id: true },
+        });
+      }
+      
+      return user?.id || 1;
+    } catch (e) {
+      console.error('Error getting user ID:', e);
+      return 1; // Fallback
+    }
   }
 
   // Start strategy directly with config (for preset strategies)
@@ -39,7 +94,7 @@ export class StrategiesController {
     }
   ) {
     try {
-      const userId = this.getUserId(req);
+      const userId = await this.getUserId(req);
       const exchangeName = body.exchange || 'binance';
       const conn = this.exchange.getConnection(exchangeName, userId);
       
@@ -86,7 +141,8 @@ export class StrategiesController {
   @UseGuards(JwtAuthGuard)
   @Get('my')
   async getMyStrategies(@Req() req: AuthenticatedRequest) {
-    return this.strategies.getUserStrategies(this.getUserId(req));
+    const userId = await this.getUserId(req);
+    return this.strategies.getUserStrategies(userId);
   }
 
   // Save a new strategy
@@ -104,7 +160,8 @@ export class StrategiesController {
     backtestResults?: Record<string, unknown>;
   }) {
     try {
-      const strategy = await this.strategies.saveStrategy(this.getUserId(req), body);
+      const userId = await this.getUserId(req);
+      const strategy = await this.strategies.saveStrategy(userId, body);
       return { 
         success: true, 
         message: 'Strategy saved successfully!',
@@ -131,14 +188,16 @@ export class StrategiesController {
     @Param('id') id: string,
     @Body() body: Record<string, unknown>
   ) {
-    return this.strategies.updateStrategy(this.getUserId(req), parseInt(id), body);
+    const userId = await this.getUserId(req);
+    return this.strategies.updateStrategy(userId, parseInt(id), body);
   }
 
   // Delete strategy
   @UseGuards(JwtAuthGuard)
   @Delete(':id')
   async deleteStrategy(@Req() req: AuthenticatedRequest, @Param('id') id: string) {
-    return this.strategies.deleteStrategy(this.getUserId(req), parseInt(id));
+    const userId = await this.getUserId(req);
+    return this.strategies.deleteStrategy(userId, parseInt(id));
   }
 
   // Start a strategy (live trading)
@@ -149,7 +208,7 @@ export class StrategiesController {
     @Param('id') id: string,
     @Body() body: { initialBalance?: number; exchange?: string }
   ) {
-    const userId = this.getUserId(req);
+    const userId = await this.getUserId(req);
     const exchangeName = body.exchange || 'binance';
     const conn = this.exchange.getConnection(exchangeName, userId);
     
@@ -174,21 +233,24 @@ export class StrategiesController {
   @UseGuards(JwtAuthGuard)
   @Post('runs/:runId/stop')
   async stopStrategy(@Req() req: AuthenticatedRequest, @Param('runId') runId: string) {
-    return this.strategies.stopStrategy(this.getUserId(req), parseInt(runId));
+    const userId = await this.getUserId(req);
+    return this.strategies.stopStrategy(userId, parseInt(runId));
   }
 
   // Get running strategies
   @UseGuards(JwtAuthGuard)
   @Get('running')
   async getRunningStrategies(@Req() req: AuthenticatedRequest) {
-    return this.strategies.getRunningStrategies(this.getUserId(req));
+    const userId = await this.getUserId(req);
+    return this.strategies.getRunningStrategies(userId);
   }
 
   // Get run details
   @UseGuards(JwtAuthGuard)
   @Get('runs/:runId')
   async getRunDetails(@Req() req: AuthenticatedRequest, @Param('runId') runId: string) {
-    return this.strategies.getRunDetails(this.getUserId(req), parseInt(runId));
+    const userId = await this.getUserId(req);
+    return this.strategies.getRunDetails(userId, parseInt(runId));
   }
 
   // List all active jobs (admin/monitoring)
