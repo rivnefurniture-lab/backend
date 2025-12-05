@@ -47,6 +47,42 @@ export class StrategiesService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  // Helper to resolve userId - handles both numeric IDs and supabaseId strings
+  private async resolveUserId(userId: number | string): Promise<number> {
+    if (typeof userId === 'number') {
+      return userId;
+    }
+    
+    // It's a supabaseId string - look up the actual user
+    this.logger.log(`Resolving supabaseId: ${userId}`);
+    
+    try {
+      let user = await this.prisma.user.findFirst({
+        where: { supabaseId: userId },
+        select: { id: true },
+      });
+      
+      if (!user) {
+        // Try to create the user if they don't exist
+        this.logger.log(`User not found for supabaseId ${userId}, creating...`);
+        user = await this.prisma.user.create({
+          data: {
+            supabaseId: userId,
+            email: `user-${userId.substring(0, 8)}@temp.local`,
+            xp: 0,
+            level: 1,
+          },
+          select: { id: true },
+        });
+      }
+      
+      return user.id;
+    } catch (e) {
+      this.logger.error(`Failed to resolve userId: ${e.message}`);
+      throw new BadRequestException('Could not resolve user');
+    }
+  }
+
   // Calculate RSI
   private calculateRSI(closes: number[], period: number = 14): number | null {
     if (closes.length < period + 1) return null;
@@ -231,9 +267,10 @@ export class StrategiesService {
   }
 
   // Get user's saved strategies
-  async getUserStrategies(userId: number) {
+  async getUserStrategies(userId: number | string) {
+    const numericUserId = await this.resolveUserId(userId);
     return this.prisma.strategy.findMany({
-      where: { userId },
+      where: { userId: numericUserId },
       orderBy: { updatedAt: 'desc' },
       include: {
         runs: {
@@ -245,7 +282,7 @@ export class StrategiesService {
   }
 
   // Save a new strategy
-  async saveStrategy(userId: number, data: {
+  async saveStrategy(userId: number | string, data: {
     name: string;
     description?: string;
     category?: string;
@@ -256,9 +293,12 @@ export class StrategiesService {
     backtestResults?: any;
     isPublic?: boolean;
   }) {
+    const numericUserId = await this.resolveUserId(userId);
+    this.logger.log(`Saving strategy for user ID: ${numericUserId}`);
+    
     const strategy = await this.prisma.strategy.create({
       data: {
-        userId,
+        userId: numericUserId,
         name: data.name,
         description: data.description,
         category: data.category || 'Custom',
@@ -278,9 +318,10 @@ export class StrategiesService {
   }
 
   // Update strategy
-  async updateStrategy(userId: number, strategyId: number, data: any) {
+  async updateStrategy(userId: number | string, strategyId: number, data: any) {
+    const numericUserId = await this.resolveUserId(userId);
     const strategy = await this.prisma.strategy.findFirst({
-      where: { id: strategyId, userId }
+      where: { id: strategyId, userId: numericUserId }
     });
 
     if (!strategy) {
@@ -301,9 +342,10 @@ export class StrategiesService {
   }
 
   // Delete strategy
-  async deleteStrategy(userId: number, strategyId: number) {
+  async deleteStrategy(userId: number | string, strategyId: number) {
+    const numericUserId = await this.resolveUserId(userId);
     const strategy = await this.prisma.strategy.findFirst({
-      where: { id: strategyId, userId }
+      where: { id: strategyId, userId: numericUserId }
     });
 
     if (!strategy) {
@@ -326,13 +368,14 @@ export class StrategiesService {
 
   // Start a strategy run
   async startStrategy(
-    userId: number,
+    userId: number | string,
     strategyId: number,
     exchangeInstance: Exchange,
     initialBalance: number
   ) {
+    const numericUserId = await this.resolveUserId(userId);
     const strategy = await this.prisma.strategy.findFirst({
-      where: { id: strategyId, userId }
+      where: { id: strategyId, userId: numericUserId }
     });
 
     if (!strategy) {
@@ -352,7 +395,7 @@ export class StrategiesService {
     // Create strategy run record
     const run = await this.prisma.strategyRun.create({
       data: {
-        userId,
+        userId: numericUserId,
         strategyId,
         config: strategy.config,
         pairs: strategy.pairs,
@@ -560,11 +603,12 @@ export class StrategiesService {
   }
 
   // Stop strategy run
-  async stopStrategy(userId: number, runId: number) {
+  async stopStrategy(userId: number | string, runId: number) {
+    const numericUserId = await this.resolveUserId(userId);
     const jobId = `run_${runId}`;
     const job = this.jobs.get(jobId);
 
-    if (!job || job.userId !== userId) {
+    if (!job || job.userId !== numericUserId) {
       throw new BadRequestException('Strategy run not found');
     }
 
@@ -588,9 +632,10 @@ export class StrategiesService {
   }
 
   // Get running strategies for user
-  async getRunningStrategies(userId: number) {
+  async getRunningStrategies(userId: number | string) {
+    const numericUserId = await this.resolveUserId(userId);
     const runs = await this.prisma.strategyRun.findMany({
-      where: { userId, status: 'running' },
+      where: { userId: numericUserId, status: 'running' },
       include: {
         strategy: true,
         trades: {
@@ -614,9 +659,10 @@ export class StrategiesService {
   }
 
   // Get strategy run details with trades
-  async getRunDetails(userId: number, runId: number) {
+  async getRunDetails(userId: number | string, runId: number) {
+    const numericUserId = await this.resolveUserId(userId);
     const run = await this.prisma.strategyRun.findFirst({
-      where: { id: runId, userId },
+      where: { id: runId, userId: numericUserId },
       include: {
         strategy: true,
         trades: {
