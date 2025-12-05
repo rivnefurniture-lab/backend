@@ -369,7 +369,7 @@ export class StrategiesService {
     });
   }
 
-  // Delete strategy
+  // Delete strategy (and all associated runs/trades)
   async deleteStrategy(userId: number | string, strategyId: number) {
     const numericUserId = await this.resolveUserId(userId);
     const strategy = await this.prisma.strategy.findFirst({
@@ -387,11 +387,26 @@ export class StrategiesService {
       }
     }
 
+    // Delete all trades from runs first
+    await this.prisma.trade.deleteMany({
+      where: {
+        strategyRun: {
+          strategyId
+        }
+      }
+    });
+
+    // Delete all runs
+    await this.prisma.strategyRun.deleteMany({
+      where: { strategyId }
+    });
+
+    // Now delete the strategy
     await this.prisma.strategy.delete({
       where: { id: strategyId }
     });
 
-    return { success: true };
+    return { success: true, message: 'Strategy and all associated data deleted' };
   }
 
   // Start a strategy run
@@ -754,56 +769,67 @@ export class StrategiesService {
     const jobId = `run_${runId}`;
     const job = this.jobs.get(jobId);
 
-    if (!job || job.userId !== numericUserId) {
-      throw new BadRequestException('Strategy run not found');
+    // First check if the run exists in database
+    const run = await this.prisma.strategyRun.findFirst({
+      where: { id: runId, userId: numericUserId }
+    });
+
+    if (!run) {
+      throw new BadRequestException('Strategy run not found in database');
     }
 
     // Close all open positions before stopping
     const closedPositions: string[] = [];
-    try {
-      const openTrades = await this.prisma.trade.findMany({
-        where: {
-          strategyRunId: runId,
-          side: 'buy',
-          status: 'filled',
-          exitPrice: null
-        }
-      });
+    
+    // Try to close positions if we have an exchange connection (either from job or from exchange service)
+    if (job?.exchangeInstance) {
+      try {
+        const openTrades = await this.prisma.trade.findMany({
+          where: {
+            strategyRunId: runId,
+            side: 'buy',
+            status: 'filled',
+            exitPrice: null
+          }
+        });
 
-      for (const trade of openTrades) {
-        try {
-          const exchange = job.exchangeInstance;
-          const preciseQty = String(exchange.amountToPrecision(trade.symbol, trade.quantity) || trade.quantity);
-          
-          this.logger.log(`[${jobId}] Closing position: SELL ${preciseQty} ${trade.symbol}`);
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
-          const order: any = await (exchange as any).createOrder(trade.symbol, 'market', 'sell', preciseQty);
-          
-          const exitPrice = order.average || order.price || trade.price;
-          const profitLoss = (exitPrice - trade.entryPrice!) * trade.quantity;
-          const profitPercent = ((exitPrice - trade.entryPrice!) / trade.entryPrice!) * 100;
-          
-          await this.prisma.trade.update({
-            where: { id: trade.id },
-            data: {
-              exitPrice,
-              profitLoss,
-              profitPercent,
-              orderId: `${trade.orderId || ''} / ${order.id}`,
-              comment: 'Position closed on strategy stop'
-            }
-          });
-          
-          closedPositions.push(`${trade.symbol} @ ${exitPrice}`);
-          this.logger.log(`[${jobId}] Closed ${trade.symbol} @ ${exitPrice} (P/L: ${profitLoss.toFixed(2)})`);
-        } catch (err) {
-          this.logger.error(`[${jobId}] Failed to close ${trade.symbol}: ${err.message}`);
+        for (const trade of openTrades) {
+          try {
+            const exchange = job.exchangeInstance;
+            const preciseQty = String(exchange.amountToPrecision(trade.symbol, trade.quantity) || trade.quantity);
+            
+            this.logger.log(`[${jobId}] Closing position: SELL ${preciseQty} ${trade.symbol}`);
+            const order: any = await (exchange as any).createOrder(trade.symbol, 'market', 'sell', preciseQty);
+            
+            const exitPrice = order.average || order.price || trade.price;
+            const profitLoss = (exitPrice - trade.entryPrice!) * trade.quantity;
+            const profitPercent = ((exitPrice - trade.entryPrice!) / trade.entryPrice!) * 100;
+            
+            await this.prisma.trade.update({
+              where: { id: trade.id },
+              data: {
+                exitPrice,
+                profitLoss,
+                profitPercent,
+                orderId: `${trade.orderId || ''} / ${order.id}`,
+                comment: 'Position closed on strategy stop'
+              }
+            });
+            
+            closedPositions.push(`${trade.symbol} @ ${exitPrice}`);
+            this.logger.log(`[${jobId}] Closed ${trade.symbol} @ ${exitPrice} (P/L: ${profitLoss.toFixed(2)})`);
+          } catch (err) {
+            this.logger.error(`[${jobId}] Failed to close ${trade.symbol}: ${err.message}`);
+          }
         }
+      } catch (err) {
+        this.logger.error(`[${jobId}] Error closing positions: ${err.message}`);
       }
-    } catch (err) {
-      this.logger.error(`[${jobId}] Error closing positions: ${err.message}`);
+    } else {
+      this.logger.warn(`[${jobId}] No exchange instance available - positions not closed automatically`);
     }
 
+    // Stop the in-memory job if it exists
     this.stopJob(jobId);
 
     // Update database
