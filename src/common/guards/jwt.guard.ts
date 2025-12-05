@@ -13,17 +13,27 @@ const SUPABASE_JWT_SECRET =
   process.env.JWT_SECRET ||
   'dev-secret-change-me';
 
-interface AuthenticatedRequest extends Request {
-  user?: jwt.JwtPayload;
-  cookies?: { token?: string };
-}
+// Extended request type for authentication
+type AuthRequest = Request & {
+  user?: jwt.JwtPayload | string;
+  cookies: Record<string, string>;
+};
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
-    const req = context.switchToHttp().getRequest<AuthenticatedRequest>();
-    const token =
-      req.cookies?.token || req.headers.authorization?.replace('Bearer ', '');
+    const req = context.switchToHttp().getRequest<AuthRequest>();
+    // Extract token from cookie or Authorization header
+    const cookies = req.cookies || {};
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    const cookieToken: string | undefined = cookies.token;
+
+    const authHeader = req.headers.authorization;
+    const headerToken: string | undefined =
+      typeof authHeader === 'string'
+        ? authHeader.replace('Bearer ', '')
+        : undefined;
+    const token = cookieToken || headerToken;
 
     if (!token) {
       throw new UnauthorizedException('No token provided');
@@ -34,7 +44,7 @@ export class JwtAuthGuard implements CanActivate {
       const decoded = jwt.verify(token, SUPABASE_JWT_SECRET, {
         algorithms: ['HS256'],
       });
-      req.user = decoded as jwt.JwtPayload;
+      req.user = decoded;
       return true;
     } catch {
       // If Supabase verification fails, try decoding without verification
@@ -42,7 +52,6 @@ export class JwtAuthGuard implements CanActivate {
       try {
         const decoded = jwt.decode(token);
         if (decoded && typeof decoded === 'object' && 'sub' in decoded) {
-          // Silently accept - no logging needed for normal operation
           req.user = decoded;
           return true;
         }
