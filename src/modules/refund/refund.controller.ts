@@ -4,7 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 
 interface JwtUser {
-  sub: number;
+  sub: string; // Supabase uses UUID strings
   email?: string;
 }
 
@@ -16,8 +16,28 @@ interface AuthenticatedRequest extends Request {
 export class RefundController {
   constructor(private prisma: PrismaService) {}
 
-  private getUserId(req: AuthenticatedRequest): number {
-    return req.user?.sub || 1;
+  // Resolve Supabase UUID to database user ID
+  private async getUserId(req: AuthenticatedRequest): Promise<number> {
+    const supabaseId = req.user?.sub || '';
+    const email = req.user?.email || '';
+    
+    try {
+      let user = await this.prisma.user.findFirst({
+        where: { supabaseId },
+        select: { id: true },
+      });
+      
+      if (!user && email) {
+        user = await this.prisma.user.findUnique({
+          where: { email },
+          select: { id: true },
+        });
+      }
+      
+      return user?.id || 1;
+    } catch (e) {
+      return 1;
+    }
   }
 
   @UseGuards(JwtAuthGuard)
@@ -26,48 +46,56 @@ export class RefundController {
     @Req() req: AuthenticatedRequest,
     @Body() body: { reason: string },
   ) {
-    const userId = this.getUserId(req);
+    const userId = await this.getUserId(req);
     
-    // Get user email
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { email: true },
-    });
+    try {
+      // Get user email
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { email: true },
+      });
 
-    if (!user) {
-      return { error: 'User not found' };
+      if (!user) {
+        return { error: 'User not found' };
+      }
+
+      // Create refund request
+      const refund = await this.prisma.refundRequest.create({
+        data: {
+          userId,
+          email: user.email,
+          reason: body.reason,
+          amount: 0, // Will be determined by admin
+          status: 'pending',
+        },
+      });
+
+      // TODO: Send email notification to admin
+      console.log(`New refund request from ${user.email}: ${body.reason}`);
+
+      return { 
+        ok: true, 
+        message: 'Refund request submitted successfully',
+        id: refund.id,
+      };
+    } catch (e) {
+      console.error('Error creating refund request:', e);
+      return { error: 'Failed to create refund request' };
     }
-
-    // Create refund request
-    const refund = await this.prisma.refundRequest.create({
-      data: {
-        userId,
-        email: user.email,
-        reason: body.reason,
-        amount: 0, // Will be determined by admin
-        status: 'pending',
-      },
-    });
-
-    // TODO: Send email notification to admin
-    console.log(`New refund request from ${user.email}: ${body.reason}`);
-
-    return { 
-      ok: true, 
-      message: 'Refund request submitted successfully',
-      id: refund.id,
-    };
   }
 
   @UseGuards(JwtAuthGuard)
   @Get('my')
   async getMyRequests(@Req() req: AuthenticatedRequest) {
-    const userId = this.getUserId(req);
+    const userId = await this.getUserId(req);
     
-    return this.prisma.refundRequest.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-    });
+    try {
+      return await this.prisma.refundRequest.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+      });
+    } catch (e) {
+      return [];
+    }
   }
 }
-

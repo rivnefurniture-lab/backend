@@ -4,7 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 
 interface JwtUser {
-  sub: number;
+  sub: string; // Supabase uses UUID strings
   email?: string;
 }
 
@@ -17,8 +17,28 @@ interface AuthenticatedRequest extends Request {
 export class TradesController {
   constructor(private prisma: PrismaService) {}
 
-  private getUserId(req: AuthenticatedRequest): number {
-    return req.user?.sub || 1;
+  // Resolve Supabase UUID to database user ID
+  private async getUserId(req: AuthenticatedRequest): Promise<number> {
+    const supabaseId = req.user?.sub || '';
+    const email = req.user?.email || '';
+    
+    try {
+      let user = await this.prisma.user.findFirst({
+        where: { supabaseId },
+        select: { id: true },
+      });
+      
+      if (!user && email) {
+        user = await this.prisma.user.findUnique({
+          where: { email },
+          select: { id: true },
+        });
+      }
+      
+      return user?.id || 1;
+    } catch (e) {
+      return 1;
+    }
   }
 
   @Get()
@@ -27,7 +47,7 @@ export class TradesController {
     @Query('filter') filter?: string,
     @Query('range') range?: string,
   ) {
-    const userId = this.getUserId(req);
+    const userId = await this.getUserId(req);
     
     // Calculate date range
     let dateFrom: Date | undefined;
@@ -72,32 +92,44 @@ export class TradesController {
       }
     }
 
-    return this.prisma.trade.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      take: 100,
-    });
+    try {
+      return await this.prisma.trade.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      });
+    } catch (e) {
+      return [];
+    }
   }
 
   @Get('stats')
   async getStats(@Req() req: AuthenticatedRequest) {
-    const userId = this.getUserId(req);
+    const userId = await this.getUserId(req);
     
-    const trades = await this.prisma.trade.findMany({
-      where: { userId },
-    });
+    try {
+      const trades = await this.prisma.trade.findMany({
+        where: { userId },
+      });
 
-    const totalTrades = trades.length;
-    const totalProfit = trades.reduce((sum, t) => sum + (t.profitLoss || 0), 0);
-    const winningTrades = trades.filter(t => (t.profitLoss || 0) > 0).length;
-    const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
+      const totalTrades = trades.length;
+      const totalProfit = trades.reduce((sum, t) => sum + (t.profitLoss || 0), 0);
+      const winningTrades = trades.filter(t => (t.profitLoss || 0) > 0).length;
+      const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
 
-    return {
-      totalTrades,
-      totalProfit,
-      winningTrades,
-      winRate,
-    };
+      return {
+        totalTrades,
+        totalProfit,
+        winningTrades,
+        winRate,
+      };
+    } catch (e) {
+      return {
+        totalTrades: 0,
+        totalProfit: 0,
+        winningTrades: 0,
+        winRate: 0,
+      };
+    }
   }
 }
-
