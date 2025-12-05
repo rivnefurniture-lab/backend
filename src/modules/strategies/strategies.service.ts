@@ -483,13 +483,18 @@ export class StrategiesService {
       }
     };
 
-    // Start the trading loop
-    const intervalMs = config.intervalMs || 60000; // Default 1 minute
+    // Start the trading loop - shorter interval for test strategies
+    const isTestStrategy = strategy.name.toLowerCase().includes('test');
+    const intervalMs = config.intervalMs || (isTestStrategy ? 30000 : 60000); // 30s for test, 60s default
+    
+    this.logger.log(`[${jobId}] Trading interval: ${intervalMs/1000}s, Test mode: ${isTestStrategy}`);
+    
     job.timer = setInterval(async () => {
       await this.executeTradingTick(job, exchangeInstance);
     }, intervalMs);
 
     // Execute first tick immediately
+    this.logger.log(`[${jobId}] Executing first tick...`);
     this.executeTradingTick(job, exchangeInstance);
 
     this.jobs.set(jobId, job);
@@ -586,20 +591,29 @@ export class StrategiesService {
       const config = job.config;
       const entryConditions = config.entry_conditions || config.bullish_entry_conditions || [];
       const exitConditions = config.exit_conditions || config.bullish_exit_conditions || [];
+      
+      // Get timeframe from config or entry conditions
+      const timeframe = config.timeframe || 
+        entryConditions[0]?.subfields?.Timeframe || 
+        '1m'; // Default to 1m for faster testing
+      
+      // Get RSI length from conditions
+      const rsiLength = entryConditions.find((c: any) => c.indicator === 'RSI')?.subfields?.['RSI Length'] || 14;
 
       for (const symbol of job.symbols) {
         try {
-          // Fetch recent OHLCV data
-          const ohlcv = await exchange.fetchOHLCV(symbol, '1h', undefined, 100);
+          // Fetch recent OHLCV data with configured timeframe
+          this.logger.log(`[${job.id}] Fetching ${symbol} ${timeframe} data...`);
+          const ohlcv = await exchange.fetchOHLCV(symbol, timeframe, undefined, 100);
           const closes = ohlcv.map(c => c[4] as number);
           const currentPrice = closes[closes.length - 1];
 
-          // Calculate indicators
+          // Calculate indicators with configured periods
           const indicators: IndicatorValues = {
             close: currentPrice,
             prevClose: closes[closes.length - 2],
-            rsi: this.calculateRSI(closes, 14) ?? undefined,
-            prevRsi: this.calculateRSI(closes.slice(0, -1), 14) ?? undefined,
+            rsi: this.calculateRSI(closes, rsiLength) ?? undefined,
+            prevRsi: this.calculateRSI(closes.slice(0, -1), rsiLength) ?? undefined,
             smaFast: this.calculateSMA(closes, 20) ?? undefined,
             smaSlow: this.calculateSMA(closes, 50) ?? undefined,
             prevSmaFast: this.calculateSMA(closes.slice(0, -1), 20) ?? undefined,
@@ -607,6 +621,8 @@ export class StrategiesService {
             bbPercent: this.calculateBBPercent(closes, 20, 2) ?? undefined,
             prevBbPercent: this.calculateBBPercent(closes.slice(0, -1), 20, 2) ?? undefined,
           };
+          
+          this.logger.log(`[${job.id}] ${symbol} Price: $${currentPrice.toFixed(2)}, RSI(${rsiLength}): ${indicators.rsi?.toFixed(2)}`);
 
           const macd = this.calculateMACD(closes);
           const prevMacd = this.calculateMACD(closes.slice(0, -1));
