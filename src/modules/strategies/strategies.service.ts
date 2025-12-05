@@ -522,11 +522,11 @@ export class StrategiesService {
             if (this.checkConditions(entryConditions, indicators, prevIndicators)) {
               // Execute buy - ACTUALLY PLACE ORDER ON EXCHANGE
               const quantity = (config.orderSize || 1000) / currentPrice;
-              const preciseQty = exchange.amountToPrecision(symbol, quantity);
+              const preciseQty = String(exchange.amountToPrecision(symbol, quantity) || quantity);
               
               let orderId: string | undefined;
               let actualPrice = currentPrice;
-              let actualQty = parseFloat(preciseQty);
+              let actualQty = Number(preciseQty);
               
               try {
                 // Place REAL order on exchange
@@ -535,7 +535,7 @@ export class StrategiesService {
                 const order: any = await (exchange as any).createOrder(symbol, 'market', 'buy', preciseQty);
                 orderId = order.id;
                 actualPrice = order.average || order.price || currentPrice;
-                actualQty = order.filled || parseFloat(preciseQty);
+                actualQty = order.filled || Number(preciseQty);
                 this.logger.log(`[${job.id}] Order filled: ${orderId} @ ${actualPrice}`);
               } catch (orderErr: any) {
                 this.logger.error(`[${job.id}] Order failed: ${orderErr.message}`);
@@ -572,7 +572,7 @@ export class StrategiesService {
               
               try {
                 // Place REAL sell order on exchange
-                const preciseQty = exchange.amountToPrecision(symbol, openTrade.quantity);
+                const preciseQty = String(exchange.amountToPrecision(symbol, openTrade.quantity) || openTrade.quantity);
                 this.logger.log(`[${job.id}] Placing SELL order: ${preciseQty} ${symbol}`);
                 // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
                 const order: any = await (exchange as any).createOrder(symbol, 'market', 'sell', preciseQty);
@@ -668,7 +668,7 @@ export class StrategiesService {
       for (const trade of openTrades) {
         try {
           const exchange = job.exchangeInstance;
-          const preciseQty = exchange.amountToPrecision(trade.symbol, trade.quantity);
+          const preciseQty = String(exchange.amountToPrecision(trade.symbol, trade.quantity) || trade.quantity);
           
           this.logger.log(`[${jobId}] Closing position: SELL ${preciseQty} ${trade.symbol}`);
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
