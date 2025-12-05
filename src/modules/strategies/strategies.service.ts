@@ -10,6 +10,7 @@ interface ActiveJob {
   strategyId: number;
   userId: number;
   exchange: string;
+  exchangeInstance: Exchange; // Keep reference to close positions
   symbols: string[];
   config: any;
   timer: NodeJS.Timeout;
@@ -416,6 +417,7 @@ export class StrategiesService {
       strategyId,
       userId: numericUserId,
       exchange: 'binance',
+      exchangeInstance: exchangeInstance, // Keep reference for closing positions
       symbols: pairs,
       config,
       status: 'running',
@@ -518,8 +520,26 @@ export class StrategiesService {
           if (!openTrade) {
             // Check entry conditions
             if (this.checkConditions(entryConditions, indicators, prevIndicators)) {
-              // Execute buy
+              // Execute buy - ACTUALLY PLACE ORDER ON EXCHANGE
               const quantity = (config.orderSize || 1000) / currentPrice;
+              const preciseQty = exchange.amountToPrecision(symbol, quantity);
+              
+              let orderId: string | undefined;
+              let actualPrice = currentPrice;
+              let actualQty = parseFloat(preciseQty);
+              
+              try {
+                // Place REAL order on exchange
+                this.logger.log(`[${job.id}] Placing BUY order: ${preciseQty} ${symbol}`);
+                const order = await exchange.createMarketBuyOrder(symbol, parseFloat(preciseQty));
+                orderId = order.id;
+                actualPrice = order.average || order.price || currentPrice;
+                actualQty = order.filled || parseFloat(preciseQty);
+                this.logger.log(`[${job.id}] Order filled: ${orderId} @ ${actualPrice}`);
+              } catch (orderErr) {
+                this.logger.error(`[${job.id}] Order failed: ${orderErr.message}`);
+                // Still record the attempted trade
+              }
               
               const trade = await this.prisma.trade.create({
                 data: {
@@ -528,33 +548,50 @@ export class StrategiesService {
                   symbol,
                   side: 'buy',
                   type: 'market',
-                  quantity,
-                  price: currentPrice,
-                  amount: quantity * currentPrice,
-                  entryPrice: currentPrice,
-                  status: 'filled',
+                  quantity: actualQty,
+                  price: actualPrice,
+                  amount: actualQty * actualPrice,
+                  entryPrice: actualPrice,
+                  status: orderId ? 'filled' : 'failed',
+                  orderId,
                   executedAt: new Date(),
-                  comment: 'Entry signal triggered'
+                  comment: orderId ? 'Entry signal - order filled' : 'Entry signal - order failed'
                 }
               });
 
               job.stats.trades++;
-              this.logger.log(`[${job.id}] BUY ${symbol} @ ${currentPrice}`);
+              this.logger.log(`[${job.id}] BUY ${symbol} @ ${actualPrice} (Order: ${orderId || 'FAILED'})`);
             }
           } else {
             // Check exit conditions
             if (this.checkConditions(exitConditions, indicators, prevIndicators)) {
-              // Execute sell
-              const profitLoss = (currentPrice - openTrade.entryPrice!) * openTrade.quantity;
-              const profitPercent = ((currentPrice - openTrade.entryPrice!) / openTrade.entryPrice!) * 100;
+              // Execute sell - ACTUALLY PLACE ORDER ON EXCHANGE
+              let orderId: string | undefined;
+              let actualPrice = currentPrice;
+              
+              try {
+                // Place REAL sell order on exchange
+                const preciseQty = exchange.amountToPrecision(symbol, openTrade.quantity);
+                this.logger.log(`[${job.id}] Placing SELL order: ${preciseQty} ${symbol}`);
+                const order = await exchange.createMarketSellOrder(symbol, parseFloat(preciseQty));
+                orderId = order.id;
+                actualPrice = order.average || order.price || currentPrice;
+                this.logger.log(`[${job.id}] Sell order filled: ${orderId} @ ${actualPrice}`);
+              } catch (orderErr) {
+                this.logger.error(`[${job.id}] Sell order failed: ${orderErr.message}`);
+              }
+              
+              const profitLoss = (actualPrice - openTrade.entryPrice!) * openTrade.quantity;
+              const profitPercent = ((actualPrice - openTrade.entryPrice!) / openTrade.entryPrice!) * 100;
 
               await this.prisma.trade.update({
                 where: { id: openTrade.id },
                 data: {
-                  exitPrice: currentPrice,
+                  exitPrice: actualPrice,
                   profitLoss,
                   profitPercent,
-                  comment: 'Exit signal triggered'
+                  orderId: orderId ? `${openTrade.orderId || ''} / ${orderId}` : openTrade.orderId,
+                  comment: orderId ? 'Exit signal - order filled' : 'Exit signal - order failed'
                 }
               });
 
@@ -562,7 +599,7 @@ export class StrategiesService {
               job.stats.profit += profitLoss;
               if (profitLoss > 0) job.stats.wins++;
 
-              this.logger.log(`[${job.id}] SELL ${symbol} @ ${currentPrice} (P/L: ${profitLoss.toFixed(2)})`);
+              this.logger.log(`[${job.id}] SELL ${symbol} @ ${actualPrice} (P/L: ${profitLoss.toFixed(2)}, Order: ${orderId || 'FAILED'})`);
 
               // Update run stats
               await this.prisma.strategyRun.update({
@@ -604,7 +641,7 @@ export class StrategiesService {
     }
   }
 
-  // Stop strategy run
+  // Stop strategy run - close all open positions first
   async stopStrategy(userId: number | string, runId: number) {
     const numericUserId = await this.resolveUserId(userId);
     const jobId = `run_${runId}`;
@@ -612,6 +649,51 @@ export class StrategiesService {
 
     if (!job || job.userId !== numericUserId) {
       throw new BadRequestException('Strategy run not found');
+    }
+
+    // Close all open positions before stopping
+    const closedPositions: string[] = [];
+    try {
+      const openTrades = await this.prisma.trade.findMany({
+        where: {
+          strategyRunId: runId,
+          side: 'buy',
+          status: 'filled',
+          exitPrice: null
+        }
+      });
+
+      for (const trade of openTrades) {
+        try {
+          const exchange = job.exchangeInstance;
+          const preciseQty = exchange.amountToPrecision(trade.symbol, trade.quantity);
+          
+          this.logger.log(`[${jobId}] Closing position: SELL ${preciseQty} ${trade.symbol}`);
+          const order = await exchange.createMarketSellOrder(trade.symbol, parseFloat(preciseQty));
+          
+          const exitPrice = order.average || order.price || trade.price;
+          const profitLoss = (exitPrice - trade.entryPrice!) * trade.quantity;
+          const profitPercent = ((exitPrice - trade.entryPrice!) / trade.entryPrice!) * 100;
+          
+          await this.prisma.trade.update({
+            where: { id: trade.id },
+            data: {
+              exitPrice,
+              profitLoss,
+              profitPercent,
+              orderId: `${trade.orderId || ''} / ${order.id}`,
+              comment: 'Position closed on strategy stop'
+            }
+          });
+          
+          closedPositions.push(`${trade.symbol} @ ${exitPrice}`);
+          this.logger.log(`[${jobId}] Closed ${trade.symbol} @ ${exitPrice} (P/L: ${profitLoss.toFixed(2)})`);
+        } catch (err) {
+          this.logger.error(`[${jobId}] Failed to close ${trade.symbol}: ${err.message}`);
+        }
+      }
+    } catch (err) {
+      this.logger.error(`[${jobId}] Error closing positions: ${err.message}`);
     }
 
     this.stopJob(jobId);
@@ -630,7 +712,11 @@ export class StrategiesService {
       data: { isActive: false }
     });
 
-    return { success: true, message: 'Strategy stopped' };
+    return { 
+      success: true, 
+      message: `Strategy stopped. Closed ${closedPositions.length} open position(s).`,
+      closedPositions
+    };
   }
 
   // Get running strategies for user

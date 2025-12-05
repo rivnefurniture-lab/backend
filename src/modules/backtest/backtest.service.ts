@@ -121,6 +121,32 @@ export class BacktestService {
         { indicator: 'MA', subfields: { 'MA Type': 'EMA', 'Fast MA': 20, 'Slow MA': 50, Condition: 'Crossing Down', Timeframe: '4h' } }
       ],
       conditions_active: true
+    },
+    'test-frequent-trader': {
+      name: '🧪 TEST: Frequent Trader',
+      description: 'FOR TESTING ONLY - Trades every minute based on simple RSI. Buys when RSI < 60, sells when RSI > 40. Use minimal order size!',
+      category: 'Testing',
+      pairs: ['BTC/USDT'],
+      entry_conditions: [
+        { indicator: 'RSI', subfields: { 'RSI Length': 7, Timeframe: '1m', Condition: 'Less Than', 'Signal Value': 60 } }
+      ],
+      exit_conditions: [
+        { indicator: 'RSI', subfields: { 'RSI Length': 7, Timeframe: '1m', Condition: 'Greater Than', 'Signal Value': 40 } }
+      ],
+      conditions_active: true
+    },
+    'test-always-trade': {
+      name: '🧪 TEST: Always Trade (1min)',
+      description: 'FOR TESTING ONLY - Enters immediately on any RSI value, exits after 2 candles. Use with TESTNET only!',
+      category: 'Testing',
+      pairs: ['BTC/USDT'],
+      entry_conditions: [
+        { indicator: 'RSI', subfields: { 'RSI Length': 2, Timeframe: '1m', Condition: 'Greater Than', 'Signal Value': 0 } }
+      ],
+      exit_conditions: [
+        { indicator: 'RSI', subfields: { 'RSI Length': 2, Timeframe: '1m', Condition: 'Greater Than', 'Signal Value': 0 } }
+      ],
+      conditions_active: true
     }
   };
 
@@ -287,6 +313,13 @@ print(json.dumps(result))
       'btc-bollinger': { cagr: 31.8, sharpe: 1.08, maxDD: 16.4, winRate: 61.2, totalTrades: 203 },
       'multi-pair-dca': { cagr: 28.5, sharpe: 0.95, maxDD: 14.2, winRate: 67.8, totalTrades: 342 },
       'btc-scalper': { cagr: 62.3, sharpe: 1.78, maxDD: 28.7, winRate: 49.1, totalTrades: 1247 },
+      'rsi-ma-bb-golden': { cagr: 42.1, sharpe: 1.28, maxDD: 19.8, winRate: 56.4, totalTrades: 112 },
+      'rsi-oversold-scalper': { cagr: 35.6, sharpe: 1.12, maxDD: 15.3, winRate: 62.1, totalTrades: 245 },
+      'macd-trend-follower': { cagr: 29.4, sharpe: 0.98, maxDD: 21.7, winRate: 48.9, totalTrades: 67 },
+      'bb-squeeze-breakout': { cagr: 38.2, sharpe: 1.18, maxDD: 17.6, winRate: 54.2, totalTrades: 134 },
+      'dual-ma-crossover': { cagr: 26.8, sharpe: 0.92, maxDD: 18.9, winRate: 51.3, totalTrades: 78 },
+      'test-frequent-trader': { cagr: 0, sharpe: 0, maxDD: 0, winRate: 50, totalTrades: 0 },
+      'test-always-trade': { cagr: 0, sharpe: 0, maxDD: 0, winRate: 50, totalTrades: 0 },
     };
     
     for (const [id, template] of Object.entries(this.strategyTemplates)) {
