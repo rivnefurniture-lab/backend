@@ -100,9 +100,27 @@ export class StrategiesController {
     pairs: string[];
     maxDeals?: number;
     orderSize?: number;
+    isPublic?: boolean;
     backtestResults?: Record<string, unknown>;
   }) {
-    return this.strategies.saveStrategy(this.getUserId(req), body);
+    try {
+      const strategy = await this.strategies.saveStrategy(this.getUserId(req), body);
+      return { 
+        success: true, 
+        message: 'Strategy saved successfully!',
+        strategy: {
+          id: strategy.id,
+          name: strategy.name,
+          category: strategy.category,
+        }
+      };
+    } catch (error) {
+      console.error('Error saving strategy:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to save strategy' 
+      };
+    }
   }
 
   // Update strategy

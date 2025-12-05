@@ -24,8 +24,11 @@ export class UserController {
   @Get('profile')
   async getProfile(@Req() req: AuthenticatedRequest) {
     const userId = this.getUserId(req);
+    const email = req.user?.email;
+    
     try {
-      const user = await this.prisma.user.findUnique({
+      // First try to find by ID
+      let user = await this.prisma.user.findUnique({
         where: { id: userId },
         select: {
           id: true,
@@ -48,8 +51,41 @@ export class UserController {
         },
       });
       
+      // If not found and we have email, try to find by email or create
+      if (!user && email) {
+        user = await this.prisma.user.upsert({
+          where: { email },
+          create: {
+            email,
+            supabaseId: String(userId),
+            xp: 0,
+            level: 1,
+          },
+          update: {},
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            phone: true,
+            country: true,
+            profilePhoto: true,
+            xp: true,
+            level: true,
+            achievements: true,
+            subscriptionPlan: true,
+            subscriptionStatus: true,
+            telegramEnabled: true,
+            emailNotifications: true,
+            notifyOnTrade: true,
+            notifyOnBacktest: true,
+            notifyOnBalance: true,
+            createdAt: true,
+          },
+        });
+      }
+      
       if (!user) {
-        return { error: 'User not found' };
+        return { error: 'User not found', id: userId };
       }
       
       // Parse achievements
@@ -64,7 +100,7 @@ export class UserController {
       };
     } catch (e) {
       console.error('Error fetching profile:', e);
-      return { error: 'Failed to fetch profile' };
+      return { error: 'Failed to fetch profile', details: e.message };
     }
   }
 
@@ -79,29 +115,64 @@ export class UserController {
     }
   ) {
     const userId = this.getUserId(req);
+    const email = req.user?.email;
+    
     try {
-      const user = await this.prisma.user.update({
-        where: { id: userId },
-        data: {
-          name: body.name,
-          phone: body.phone,
-          country: body.country,
-          profilePhoto: body.profilePhoto,
-        },
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          phone: true,
-          country: true,
-          profilePhoto: true,
-        },
-      });
+      // Build update data - only include defined values
+      const updateData: any = {};
+      if (body.name !== undefined) updateData.name = body.name;
+      if (body.phone !== undefined) updateData.phone = body.phone;
+      if (body.country !== undefined) updateData.country = body.country;
+      if (body.profilePhoto !== undefined) updateData.profilePhoto = body.profilePhoto;
+
+      let user;
       
+      // Try update by ID first
+      try {
+        user = await this.prisma.user.update({
+          where: { id: userId },
+          data: updateData,
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            phone: true,
+            country: true,
+            profilePhoto: true,
+          },
+        });
+      } catch {
+        // If update fails (user doesn't exist), upsert by email
+        if (email) {
+          user = await this.prisma.user.upsert({
+            where: { email },
+            create: {
+              email,
+              supabaseId: String(userId),
+              ...updateData,
+              xp: 0,
+              level: 1,
+            },
+            update: updateData,
+            select: {
+              id: true,
+              email: true,
+              name: true,
+              phone: true,
+              country: true,
+              profilePhoto: true,
+            },
+          });
+        } else {
+          throw new Error('Cannot create user without email');
+        }
+      }
+      
+      console.log('Profile updated successfully:', user.id, 'Photo:', body.profilePhoto ? 'yes' : 'no');
       return { success: true, user };
     } catch (e) {
       console.error('Error updating profile:', e);
-      return { error: 'Failed to update profile' };
+      return { error: 'Failed to update profile', details: e.message };
     }
   }
 
