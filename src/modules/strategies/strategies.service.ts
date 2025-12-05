@@ -531,12 +531,12 @@ export class StrategiesService {
               try {
                 // Place REAL order on exchange
                 this.logger.log(`[${job.id}] Placing BUY order: ${preciseQty} ${symbol}`);
-                const order = await exchange.createMarketBuyOrder(symbol, parseFloat(preciseQty));
+                const order = await exchange.createOrder(symbol, 'market', 'buy', parseFloat(preciseQty));
                 orderId = order.id;
                 actualPrice = order.average || order.price || currentPrice;
                 actualQty = order.filled || parseFloat(preciseQty);
                 this.logger.log(`[${job.id}] Order filled: ${orderId} @ ${actualPrice}`);
-              } catch (orderErr) {
+              } catch (orderErr: any) {
                 this.logger.error(`[${job.id}] Order failed: ${orderErr.message}`);
                 // Still record the attempted trade
               }
@@ -573,11 +573,11 @@ export class StrategiesService {
                 // Place REAL sell order on exchange
                 const preciseQty = exchange.amountToPrecision(symbol, openTrade.quantity);
                 this.logger.log(`[${job.id}] Placing SELL order: ${preciseQty} ${symbol}`);
-                const order = await exchange.createMarketSellOrder(symbol, parseFloat(preciseQty));
+                const order = await exchange.createOrder(symbol, 'market', 'sell', parseFloat(preciseQty));
                 orderId = order.id;
                 actualPrice = order.average || order.price || currentPrice;
                 this.logger.log(`[${job.id}] Sell order filled: ${orderId} @ ${actualPrice}`);
-              } catch (orderErr) {
+              } catch (orderErr: any) {
                 this.logger.error(`[${job.id}] Sell order failed: ${orderErr.message}`);
               }
               
@@ -669,7 +669,7 @@ export class StrategiesService {
           const preciseQty = exchange.amountToPrecision(trade.symbol, trade.quantity);
           
           this.logger.log(`[${jobId}] Closing position: SELL ${preciseQty} ${trade.symbol}`);
-          const order = await exchange.createMarketSellOrder(trade.symbol, parseFloat(preciseQty));
+          const order = await exchange.createOrder(trade.symbol, 'market', 'sell', parseFloat(preciseQty));
           
           const exitPrice = order.average || order.price || trade.price;
           const profitLoss = (exitPrice - trade.entryPrice!) * trade.quantity;
