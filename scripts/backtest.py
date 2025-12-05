@@ -7,8 +7,7 @@ from collections import defaultdict, deque
 from concurrent.futures import as_completed, ThreadPoolExecutor
 
 # Constants
-import os
-DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'static')
+DATA_DIR = "static"
 
 ALL_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 

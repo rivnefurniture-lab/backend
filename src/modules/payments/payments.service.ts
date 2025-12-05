@@ -1,24 +1,7 @@
 // src/modules/payments/payments.service.ts
-import { Injectable, BadRequestException } from '@nestjs/common';
-import * as crypto from 'crypto';
+import { Injectable } from '@nestjs/common';
 
 type PlanId = 'starter' | 'pro' | 'elite';
-
-interface BinancePayResponse {
-  status: string;
-  code: string;
-  data?: {
-    prepayId?: string;
-    terminalType?: string;
-    expireTime?: number;
-    qrcodeLink?: string;
-    qrContent?: string;
-    checkoutUrl?: string;
-    deeplink?: string;
-    universalUrl?: string;
-  };
-  errorMessage?: string;
-}
 
 @Injectable()
 export class PaymentsService {
@@ -31,135 +14,96 @@ export class PaymentsService {
     elite: 79,
   };
 
-  // ==================== BINANCE PAY ====================
-  private generateBinanceSignature(
-    timestamp: string,
-    nonce: string,
-    body: string,
-  ): string {
-    const secretKey = process.env.BINANCE_PAY_SECRET_KEY;
-    if (!secretKey) throw new BadRequestException('Binance Pay not configured');
-
-    const payload = `${timestamp}\n${nonce}\n${body}\n`;
-    return crypto
-      .createHmac('sha512', secretKey)
-      .update(payload)
-      .digest('hex')
-      .toUpperCase();
-  }
-
-  async createBinancePayOrder(planId: PlanId = 'starter', userId?: string) {
-    const apiKey = process.env.BINANCE_PAY_API_KEY;
-    const merchantId = process.env.BINANCE_PAY_MERCHANT_ID;
-
-    if (!apiKey || !merchantId) {
-      throw new BadRequestException('Binance Pay not configured');
-    }
-
-    const amount = this.PRICE_MAP[planId];
-    const timestamp = Date.now().toString();
-    const nonce = crypto.randomBytes(16).toString('hex');
-    const merchantTradeNo = `ALG${Date.now()}${Math.random().toString(36).substring(7)}`;
-
-    const requestBody = {
-      env: {
-        terminalType: 'WEB',
-      },
-      merchantTradeNo,
-      orderAmount: amount.toFixed(2),
-      currency: 'USDT',
-      description: `Algotcha ${planId} subscription`,
-      goodsDetails: [
-        {
-          goodsType: '02',
-          goodsCategory: 'Z000',
-          referenceGoodsId: planId,
-          goodsName: `Algotcha ${planId.charAt(0).toUpperCase() + planId.slice(1)} Plan`,
-          goodsDetail: `Monthly subscription to Algotcha ${planId} trading strategies`,
-          goodsUnitAmount: { currency: 'USDT', amount: amount.toFixed(2) },
-          goodsQuantity: '1',
-        },
-      ],
-      returnUrl: `${this.FRONTEND_URL}/pay-success?plan=${planId}`,
-      cancelUrl: `${this.FRONTEND_URL}/pay-cancel`,
-      webhookUrl: `${process.env.BACKEND_URL || 'http://localhost:8080'}/pay/binance/webhook`,
-      orderExpireTime: Date.now() + 3600000,
-    };
-
-    const bodyString = JSON.stringify(requestBody);
-    const signature = this.generateBinanceSignature(timestamp, nonce, bodyString);
-
-    const response = await fetch(
-      'https://bpay.binanceapi.com/binancepay/openapi/v2/order',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'BinancePay-Timestamp': timestamp,
-          'BinancePay-Nonce': nonce,
-          'BinancePay-Certificate-SN': apiKey,
-          'BinancePay-Signature': signature,
-        },
-        body: bodyString,
-      },
-    );
-
-    const data = (await response.json()) as BinancePayResponse;
-
-    if (data.status !== 'SUCCESS') {
-      throw new BadRequestException(
-        data.errorMessage || 'Binance Pay order creation failed',
-      );
-    }
-
-    return {
-      provider: 'binance',
-      checkoutUrl: data.data?.checkoutUrl,
-      qrCode: data.data?.qrcodeLink,
-      universalUrl: data.data?.universalUrl,
-      orderId: merchantTradeNo,
-      expireTime: data.data?.expireTime,
-    };
-  }
-
   // ==================== DIRECT CRYPTO (Manual) ====================
+  // This is the simplest approach - user sends crypto to your wallet
+  // You manually verify and activate their subscription
   async createCryptoPayment(planId: PlanId = 'starter', userEmail?: string) {
     const amount = this.PRICE_MAP[planId];
-    const walletAddress = process.env.CRYPTO_WALLET_ADDRESS;
-
-    if (!walletAddress) {
-      return {
-        provider: 'crypto',
-        walletAddress: 'YOUR_USDT_TRC20_ADDRESS',
-        amount,
-        currency: 'USDT',
-        network: 'TRC20',
-        note: 'Send exact amount and contact support with transaction hash',
-      };
-    }
+    const walletAddressUSDT = process.env.CRYPTO_WALLET_USDT;
+    const walletAddressBTC = process.env.CRYPTO_WALLET_BTC;
+    const walletAddressETH = process.env.CRYPTO_WALLET_ETH;
 
     return {
       provider: 'crypto',
-      walletAddress,
+      plan: planId,
       amount,
-      currency: 'USDT',
-      network: process.env.CRYPTO_NETWORK || 'TRC20',
-      note: 'Send exact amount and contact support with transaction hash',
+      options: [
+        {
+          currency: 'USDT',
+          network: 'TRC20',
+          address: walletAddressUSDT || 'Contact support for address',
+          amount: amount.toFixed(2),
+        },
+        {
+          currency: 'USDT',
+          network: 'ERC20',
+          address: walletAddressETH || 'Contact support for address',
+          amount: amount.toFixed(2),
+        },
+        {
+          currency: 'BTC',
+          network: 'Bitcoin',
+          address: walletAddressBTC || 'Contact support for address',
+          amount: (amount / 100000).toFixed(8), // Approximate BTC conversion
+          note: 'BTC amount may vary based on current rate',
+        },
+        {
+          currency: 'ETH',
+          network: 'Ethereum',
+          address: walletAddressETH || 'Contact support for address',
+          amount: (amount / 4000).toFixed(6), // Approximate ETH conversion
+          note: 'ETH amount may vary based on current rate',
+        },
+      ],
+      instructions: [
+        '1. Choose your preferred cryptocurrency',
+        '2. Send the exact amount to the provided address',
+        '3. Save the transaction hash',
+        '4. Email support@algotcha.com with your transaction hash and email',
+        '5. Your subscription will be activated within 24 hours',
+      ],
+      supportEmail: 'support@algotcha.com',
+      returnUrl: `${this.FRONTEND_URL}/pay-success?plan=${planId}`,
     };
   }
 
-  // ==================== WEBHOOKS ====================
-  verifyBinanceWebhook(
-    timestamp: string,
-    nonce: string,
-    body: string,
-    signature: string,
-  ): boolean {
-    const expectedSignature = this.generateBinanceSignature(
-      timestamp,
-      nonce,
-      body,
-    );
-    return signature === expectedSignature;
+  // Get plan details
+  getPlanDetails(planId: PlanId) {
+    const plans = {
+      starter: {
+        name: 'Starter',
+        price: 9,
+        features: [
+          '5 Strategy Backtests/month',
+          '1 Live Trading Strategy',
+          'Basic Indicators',
+          'Email Support',
+        ],
+      },
+      pro: {
+        name: 'Pro',
+        price: 29,
+        features: [
+          'Unlimited Backtests',
+          '5 Live Trading Strategies',
+          'All Indicators',
+          'Priority Support',
+          'Custom Alerts',
+        ],
+      },
+      elite: {
+        name: 'Elite',
+        price: 79,
+        features: [
+          'Unlimited Everything',
+          'Unlimited Live Strategies',
+          'API Access',
+          'VIP Support',
+          'Custom Strategy Development',
+        ],
+      },
+    };
+
+    return plans[planId] || plans.starter;
   }
 }
