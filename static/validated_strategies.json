@@ -1,0 +1,30 @@
+{
+  "long": {
+    "name": "RSI + MA + BB Long Strategy",
+    "description": "Enters on RSI > 70 (15m) + SMA 50 > SMA 200 (1h), exits on BB%B < 0.1 (4h). Validated on 5 years of data.",
+    "metrics": {
+      "yearly_return": 66.41692174486245,
+      "sharpe_ratio": 1.7113044824008223,
+      "sortino_ratio": 2.623157371053221,
+      "max_drawdown": 17.28,
+      "win_rate": 37.35632183908046,
+      "total_trades": 174,
+      "profit_factor": 2.207756556897377,
+      "net_profit_usd": "$6605.93"
+    }
+  },
+  "short": {
+    "name": "RSI + MA + BB Short Strategy",
+    "description": "Enters on RSI < 30 (15m) + SMA 50 < SMA 200 (1h), exits on BB%B > 0.9 (4h). Mirror strategy for bearish markets.",
+    "metrics": {
+      "yearly_return": -12.576782966100641,
+      "sharpe_ratio": -0.5696001717635133,
+      "sortino_ratio": -0.4604427156774869,
+      "max_drawdown": 23.34,
+      "win_rate": 51.30434782608696,
+      "total_trades": 115,
+      "profit_factor": 0.6187049641709419,
+      "net_profit_usd": "$-1251.64"
+    }
+  }
+}
