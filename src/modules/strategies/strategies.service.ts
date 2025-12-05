@@ -294,17 +294,23 @@ export class StrategiesService {
     return true;
   }
 
-  // Get user's saved strategies
+  // Get user's saved strategies (optimized - minimal fields)
   async getUserStrategies(userId: number | string) {
     const numericUserId = await this.resolveUserId(userId);
     return this.prisma.strategy.findMany({
       where: { userId: numericUserId },
       orderBy: { updatedAt: 'desc' },
-      include: {
-        runs: {
-          where: { status: 'running' },
-          take: 1
-        }
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        category: true,
+        isActive: true,
+        lastBacktestProfit: true,
+        lastBacktestSharpe: true,
+        lastBacktestWinRate: true,
+        createdAt: true,
+        updatedAt: true,
       }
     });
   }
@@ -860,10 +866,14 @@ export class StrategiesService {
     const runs = await this.prisma.strategyRun.findMany({
       where: { userId: numericUserId, status: 'running' },
       include: {
-        strategy: true,
+        strategy: {
+          select: { id: true, name: true, description: true, category: true }
+        },
         trades: {
+          where: { status: 'filled' }, // Only show completed trades
           orderBy: { createdAt: 'desc' },
-          take: 10
+          take: 5, // Reduce from 10 to 5 for faster loading
+          select: { id: true, symbol: true, side: true, price: true, quantity: true, profitLoss: true, createdAt: true }
         }
       }
     });
