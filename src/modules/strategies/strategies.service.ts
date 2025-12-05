@@ -77,7 +77,7 @@ export class StrategiesService {
       }
       
       return user.id;
-    } catch (e) {
+      } catch (e) {
       this.logger.error(`Failed to resolve userId: ${e.message}`);
       throw new BadRequestException('Could not resolve user');
     }
@@ -412,7 +412,7 @@ export class StrategiesService {
       id: jobId,
       runId: run.id,
       strategyId,
-      userId,
+      userId: numericUserId,
       exchange: 'binance',
       symbols: pairs,
       config,
