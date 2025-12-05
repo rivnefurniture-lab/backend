@@ -1,9 +1,18 @@
 import { Controller, Get, Post, Delete, Body, Param, UseGuards, Req, Res } from '@nestjs/common';
-import type { Response } from 'express';
+import type { Response, Request } from 'express';
 import { BacktestService } from './backtest.service';
 import { RunBacktestDto } from './dto/backtest.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 import { PrismaService } from '../../prisma/prisma.service';
+
+interface JwtUser {
+  sub: string; // Supabase UUID
+  email?: string;
+}
+
+interface AuthenticatedRequest extends Request {
+  user?: JwtUser;
+}
 
 @Controller('backtest')
 export class BacktestController {
@@ -11,6 +20,30 @@ export class BacktestController {
     private readonly backtestService: BacktestService,
     private readonly prisma: PrismaService,
   ) {}
+
+  // Resolve Supabase UUID to database user ID
+  private async getUserId(req: AuthenticatedRequest): Promise<number> {
+    const supabaseId = req.user?.sub || '';
+    const email = req.user?.email || '';
+    
+    try {
+      let user = await this.prisma.user.findFirst({
+        where: { supabaseId },
+        select: { id: true },
+      });
+      
+      if (!user && email) {
+        user = await this.prisma.user.findUnique({
+          where: { email },
+          select: { id: true },
+        });
+      }
+      
+      return user?.id || 1;
+    } catch (e) {
+      return 1;
+    }
+  }
 
   @Get('indicators')
   getIndicators() {
@@ -80,11 +113,11 @@ export class BacktestController {
 
   @UseGuards(JwtAuthGuard)
   @Post('run')
-  async runBacktest(@Req() req: any, @Body() dto: RunBacktestDto) {
+  async runBacktest(@Req() req: AuthenticatedRequest, @Body() dto: RunBacktestDto) {
     const result = await this.backtestService.runBacktest(dto);
     
     if (result.status === 'success') {
-      const userId = req.user?.sub || 1;
+      const userId = await this.getUserId(req);
       const saved = await this.backtestService.saveBacktestResult(userId, dto, result);
       return { ...result, savedId: saved.id };
     }
@@ -99,14 +132,16 @@ export class BacktestController {
 
   @UseGuards(JwtAuthGuard)
   @Get('results')
-  async getResults(@Req() req: any) {
-    return this.backtestService.getBacktestResults(req.user?.sub || 1);
+  async getResults(@Req() req: AuthenticatedRequest) {
+    const userId = await this.getUserId(req);
+    return this.backtestService.getBacktestResults(userId);
   }
 
   @UseGuards(JwtAuthGuard)
   @Get('results/:id')
-  async getResult(@Req() req: any, @Param('id') id: string) {
-    return this.backtestService.getBacktestResult(parseInt(id), req.user?.sub || 1);
+  async getResult(@Req() req: AuthenticatedRequest, @Param('id') id: string) {
+    const userId = await this.getUserId(req);
+    return this.backtestService.getBacktestResult(parseInt(id), userId);
   }
 
   @Get('results/:id/export/csv')
@@ -133,14 +168,16 @@ export class BacktestController {
 
   @UseGuards(JwtAuthGuard)
   @Post('results/:id/save-as-strategy')
-  async saveAsStrategy(@Req() req: any, @Param('id') id: string, @Body() body: { name: string; description?: string }) {
-    return this.backtestService.saveAsStrategy(req.user?.sub || 1, parseInt(id), body.name, body.description);
+  async saveAsStrategy(@Req() req: AuthenticatedRequest, @Param('id') id: string, @Body() body: { name: string; description?: string }) {
+    const userId = await this.getUserId(req);
+    return this.backtestService.saveAsStrategy(userId, parseInt(id), body.name, body.description);
   }
 
   @UseGuards(JwtAuthGuard)
   @Delete('results/:id')
-  async deleteResult(@Req() req: any, @Param('id') id: string) {
-    return this.backtestService.deleteBacktestResult(parseInt(id), req.user?.sub || 1);
+  async deleteResult(@Req() req: AuthenticatedRequest, @Param('id') id: string) {
+    const userId = await this.getUserId(req);
+    return this.backtestService.deleteBacktestResult(parseInt(id), userId);
   }
 
   // Data status and management
