@@ -276,14 +276,24 @@ export class UserController {
           strategiesCreated: 0,
           backtestsRun: 0,
           tradesExecuted: 0,
+          totalProfit: 0,
+          winRate: 0,
         };
       }
       
-      const [strategiesCount, backtestsCount, tradesCount] = await Promise.all([
+      const [strategiesCount, backtestsCount, allTrades, runningStrategies] = await Promise.all([
         this.prisma.strategy.count({ where: { userId: user.id } }),
         this.prisma.backtestResult.count({ where: { userId: user.id } }),
-        this.prisma.trade.count({ where: { userId: user.id } }),
+        this.prisma.trade.findMany({ where: { userId: user.id } }),
+        this.prisma.strategyRun.count({ where: { userId: user.id, status: 'running' } }),
       ]);
+      
+      // Calculate trade stats - only count closed trades for win rate
+      const closedTrades = allTrades.filter(t => t.exitPrice !== null);
+      const totalProfit = closedTrades.reduce((sum, t) => sum + (t.profitLoss || 0), 0);
+      const winningTrades = closedTrades.filter(t => (t.profitLoss || 0) > 0).length;
+      const winRate = closedTrades.length > 0 ? (winningTrades / closedTrades.length) * 100 : 0;
+      const tradesCount = allTrades.length;
       
       let achievements = [];
       try {
@@ -297,6 +307,11 @@ export class UserController {
         strategiesCreated: strategiesCount,
         backtestsRun: backtestsCount,
         tradesExecuted: tradesCount,
+        totalProfit,
+        winRate,
+        winningTrades,
+        closedTrades: closedTrades.length,
+        runningStrategies,
         memberSince: user.createdAt,
       };
     } catch (e) {
@@ -308,6 +323,11 @@ export class UserController {
         strategiesCreated: 0,
         backtestsRun: 0,
         tradesExecuted: 0,
+        totalProfit: 0,
+        winRate: 0,
+        winningTrades: 0,
+        closedTrades: 0,
+        runningStrategies: 0,
       };
     }
   }
