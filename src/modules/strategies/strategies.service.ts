@@ -531,7 +531,8 @@ export class StrategiesService {
               try {
                 // Place REAL order on exchange
                 this.logger.log(`[${job.id}] Placing BUY order: ${preciseQty} ${symbol}`);
-                const order = await exchange.createOrder(symbol, 'market', 'buy', parseFloat(preciseQty));
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
+                const order: any = await (exchange as any).createOrder(symbol, 'market', 'buy', preciseQty);
                 orderId = order.id;
                 actualPrice = order.average || order.price || currentPrice;
                 actualQty = order.filled || parseFloat(preciseQty);
@@ -573,7 +574,8 @@ export class StrategiesService {
                 // Place REAL sell order on exchange
                 const preciseQty = exchange.amountToPrecision(symbol, openTrade.quantity);
                 this.logger.log(`[${job.id}] Placing SELL order: ${preciseQty} ${symbol}`);
-                const order = await exchange.createOrder(symbol, 'market', 'sell', parseFloat(preciseQty));
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
+                const order: any = await (exchange as any).createOrder(symbol, 'market', 'sell', preciseQty);
                 orderId = order.id;
                 actualPrice = order.average || order.price || currentPrice;
                 this.logger.log(`[${job.id}] Sell order filled: ${orderId} @ ${actualPrice}`);
@@ -669,7 +671,8 @@ export class StrategiesService {
           const preciseQty = exchange.amountToPrecision(trade.symbol, trade.quantity);
           
           this.logger.log(`[${jobId}] Closing position: SELL ${preciseQty} ${trade.symbol}`);
-          const order = await exchange.createOrder(trade.symbol, 'market', 'sell', parseFloat(preciseQty));
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
+          const order: any = await (exchange as any).createOrder(trade.symbol, 'market', 'sell', preciseQty);
           
           const exitPrice = order.average || order.price || trade.price;
           const profitLoss = (exitPrice - trade.entryPrice!) * trade.quantity;
