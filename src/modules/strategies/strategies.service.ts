@@ -205,13 +205,18 @@ export class StrategiesService {
 
   // Check if conditions are met
   private checkConditions(conditions: any[], indicators: IndicatorValues, prevIndicators?: IndicatorValues): boolean {
-    if (!conditions || conditions.length === 0) return true;
+    if (!conditions || conditions.length === 0) {
+      this.logger.log('checkConditions: No conditions, returning true');
+      return true;
+    }
 
     for (const cond of conditions) {
       const indicator = cond.indicator;
       const subfields = cond.subfields || {};
       const condition = subfields.Condition || subfields['MACD Trigger'];
       const targetValue = subfields['Signal Value'];
+      
+      this.logger.log(`checkConditions: Checking ${indicator} ${condition} ${targetValue}`);
 
       let currentValue: number | undefined;
       let previousValue: number | undefined;
@@ -248,7 +253,12 @@ export class StrategiesService {
           continue;
       }
 
-      if (currentValue === undefined) return false;
+      if (currentValue === undefined) {
+        this.logger.log(`checkConditions: ${indicator} currentValue is undefined, returning false`);
+        return false;
+      }
+      
+      this.logger.log(`checkConditions: ${indicator} currentValue=${currentValue}, targetValue=${targetValue}`);
 
       // For MA and MACD, compare fast to slow/signal
       if (indicator === 'MA' || indicator === 'MACD') {
@@ -274,10 +284,16 @@ export class StrategiesService {
         // For RSI and BB, compare to target value
         switch (condition) {
           case 'Less Than':
-            if (currentValue >= targetValue) return false;
+            if (currentValue >= targetValue) {
+              this.logger.log(`checkConditions: ${indicator} ${currentValue} >= ${targetValue}, returning false`);
+              return false;
+            }
             break;
           case 'Greater Than':
-            if (currentValue <= targetValue) return false;
+            if (currentValue <= targetValue) {
+              this.logger.log(`checkConditions: ${indicator} ${currentValue} <= ${targetValue}, returning false`);
+              return false;
+            }
             break;
           case 'Crossing Up':
             if (previousValue === undefined) return false;
@@ -291,6 +307,7 @@ export class StrategiesService {
       }
     }
 
+    this.logger.log('checkConditions: All conditions passed, returning true');
     return true;
   }
 
@@ -658,7 +675,14 @@ export class StrategiesService {
 
           if (!openTrade) {
             // Check entry conditions
-            if (this.checkConditions(entryConditions, indicators, prevIndicators)) {
+            this.logger.log(`[${job.id}] Checking entry conditions...`);
+            this.logger.log(`[${job.id}] Entry conditions: ${JSON.stringify(entryConditions)}`);
+            this.logger.log(`[${job.id}] Indicators: RSI=${indicators.rsi?.toFixed(2)}, Price=${indicators.close.toFixed(2)}`);
+            
+            const entryMet = this.checkConditions(entryConditions, indicators, prevIndicators);
+            this.logger.log(`[${job.id}] Entry conditions met: ${entryMet}`);
+            
+            if (entryMet) {
               // Execute buy - ACTUALLY PLACE ORDER ON EXCHANGE
               // Use job.orderSize (the user's specified $ amount per trade)
               const quantity = job.orderSize / currentPrice;
