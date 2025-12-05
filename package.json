@@ -12,7 +12,7 @@
   "scripts": {
     "prepare": "husky install",
     "build": "prisma generate && nest build",
-    "postbuild": "prisma migrate deploy || true",
+    "postbuild": "echo 'Migrations will run at startup'",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",

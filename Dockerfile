@@ -32,4 +32,5 @@ USER nestjs
 
 EXPOSE 8080
 
-CMD ["node", "dist/src/main.js"]
+# Run migrations at startup, then start the app
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/src/main.js"]
