@@ -148,8 +148,13 @@ export class StrategiesController {
   @UseGuards(JwtAuthGuard)
   @Get('my')
   async getMyStrategies(@Req() req: AuthenticatedRequest) {
-    const userId = await this.getUserId(req);
-    return this.strategies.getUserStrategies(userId);
+    try {
+      const userId = await this.getUserId(req);
+      return this.strategies.getUserStrategies(userId);
+    } catch (error) {
+      console.error('Error fetching strategies:', error);
+      return [];
+    }
   }
 
   // Save a new strategy
@@ -252,8 +257,13 @@ export class StrategiesController {
   @UseGuards(JwtAuthGuard)
   @Get('running')
   async getRunningStrategies(@Req() req: AuthenticatedRequest) {
-    const userId = await this.getUserId(req);
-    return this.strategies.getRunningStrategies(userId);
+    try {
+      const userId = await this.getUserId(req);
+      return this.strategies.getRunningStrategies(userId);
+    } catch (error) {
+      console.error('Error fetching running strategies:', error);
+      return [];
+    }
   }
 
   // Get run details

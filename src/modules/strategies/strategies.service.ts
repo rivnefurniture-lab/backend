@@ -451,11 +451,16 @@ export class StrategiesService {
 
     this.jobs.set(jobId, job);
     
-    // Update strategy as active
-    await this.prisma.strategy.update({
-      where: { id: strategyId },
-      data: { isActive: true }
-    });
+    // Update strategy as active (gracefully handle DB errors)
+    try {
+      await this.prisma.strategy.update({
+        where: { id: strategyId },
+        data: { isActive: true }
+      });
+    } catch (dbError) {
+      this.logger.warn(`Could not update strategy active status: ${dbError.message}`);
+      // Continue anyway - the job is already running
+    }
 
     this.logger.log(`Started strategy run ${run.id} for strategy ${strategyId}`);
 
@@ -471,14 +476,20 @@ export class StrategiesService {
   private async executeTradingTick(job: ActiveJob, exchange: Exchange) {
     try {
       // First, check if we've exceeded max budget (unrealized loss)
-      const openTrades = await this.prisma.trade.findMany({
-        where: {
-          strategyRunId: job.runId,
-          side: 'buy',
-          status: 'filled',
-          exitPrice: null
-        }
-      });
+      let openTrades: any[] = [];
+      try {
+        openTrades = await this.prisma.trade.findMany({
+          where: {
+            strategyRunId: job.runId,
+            side: 'buy',
+            status: 'filled',
+            exitPrice: null
+          }
+        });
+      } catch (dbError) {
+        this.logger.warn(`[${job.id}] DB error fetching open trades, skipping tick: ${dbError.message}`);
+        return; // Skip this tick, try again next time
+      }
       
       // Calculate unrealized P&L across all open positions
       let unrealizedPnL = 0;
