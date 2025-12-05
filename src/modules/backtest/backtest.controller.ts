@@ -16,15 +16,25 @@ interface AuthenticatedRequest extends Request {
 
 @Controller('backtest')
 export class BacktestController {
+  // Cache for userId resolution
+  private userIdCache: Map<string, { id: number; timestamp: number }> = new Map();
+  private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
   constructor(
     private readonly backtestService: BacktestService,
     private readonly prisma: PrismaService,
   ) {}
 
-  // Resolve Supabase UUID to database user ID
+  // Resolve Supabase UUID to database user ID (with caching)
   private async getUserId(req: AuthenticatedRequest): Promise<number> {
     const supabaseId = req.user?.sub || '';
     const email = req.user?.email || '';
+    
+    // Check cache first
+    const cached = this.userIdCache.get(supabaseId);
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      return cached.id;
+    }
     
     try {
       let user = await this.prisma.user.findFirst({
@@ -39,8 +49,19 @@ export class BacktestController {
         });
       }
       
-      return user?.id || 1;
+      const userId = user?.id || 1;
+      
+      // Cache the result
+      if (supabaseId && userId !== 1) {
+        this.userIdCache.set(supabaseId, { id: userId, timestamp: Date.now() });
+      }
+      
+      return userId;
     } catch (e) {
+      // Return cached value if available as fallback
+      if (cached) {
+        return cached.id;
+      }
       return 1;
     }
   }

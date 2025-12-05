@@ -48,6 +48,9 @@ export class StrategiesService {
   private readonly logger = new Logger(StrategiesService.name);
   private jobs: Map<string, ActiveJob> = new Map();
   private indicatorCache: Map<string, any[]> = new Map();
+  // Cache for userId resolution (supabaseId -> numeric userId)
+  private userIdCache: Map<string, { id: number; timestamp: number }> = new Map();
+  private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
   constructor(private readonly prisma: PrismaService) {
     this.logger.log('StrategiesService initialized');
@@ -59,14 +62,25 @@ export class StrategiesService {
       return userId;
     }
     
+    // Check cache first
+    const cached = this.userIdCache.get(userId);
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      return cached.id;
+    }
+    
     // It's a supabaseId string - look up the actual user
-    this.logger.log(`Resolving supabaseId: ${userId}`);
+    const startTime = Date.now();
     
     try {
       let user = await this.prisma.user.findFirst({
         where: { supabaseId: userId },
         select: { id: true },
       });
+      
+      const elapsed = Date.now() - startTime;
+      if (elapsed > 1000) {
+        this.logger.warn(`Slow user resolution: ${elapsed}ms for ${userId}`);
+      }
       
       if (!user) {
         // Try to create the user if they don't exist
@@ -82,9 +96,17 @@ export class StrategiesService {
         });
       }
       
+      // Cache the result
+      this.userIdCache.set(userId, { id: user.id, timestamp: Date.now() });
+      
       return user.id;
-      } catch (e) {
+    } catch (e) {
       this.logger.error(`Failed to resolve userId: ${e.message}`);
+      // Return cached value if available (even if expired) as fallback
+      if (cached) {
+        this.logger.warn(`Using expired cache for ${userId}`);
+        return cached.id;
+      }
       throw new BadRequestException('Could not resolve user');
     }
   }

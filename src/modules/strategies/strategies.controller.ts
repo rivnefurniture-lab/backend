@@ -16,6 +16,10 @@ interface AuthenticatedRequest extends Request {
 
 @Controller('strategies')
 export class StrategiesController {
+  // Cache for userId resolution
+  private userIdCache: Map<string, { id: number; timestamp: number }> = new Map();
+  private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
   constructor(
     private readonly strategies: StrategiesService,
     private readonly exchange: ExchangeService,
@@ -31,10 +35,16 @@ export class StrategiesController {
     return req.user?.email || '';
   }
   
-  // Find or create user and return their DB ID
+  // Find or create user and return their DB ID (with caching)
   private async getUserId(req: AuthenticatedRequest): Promise<number> {
     const supabaseId = this.getSupabaseId(req);
     const email = this.getEmail(req);
+    
+    // Check cache first
+    const cached = this.userIdCache.get(supabaseId);
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      return cached.id;
+    }
     
     try {
       // First try to find by supabaseId
@@ -72,10 +82,21 @@ export class StrategiesController {
         });
       }
       
-      return user?.id || 1;
+      const userId = user?.id || 1;
+      
+      // Cache the result
+      if (supabaseId && userId !== 1) {
+        this.userIdCache.set(supabaseId, { id: userId, timestamp: Date.now() });
+      }
+      
+      return userId;
     } catch (e) {
       console.error('Error getting user ID:', e);
-      return 1; // Fallback
+      // Return cached value if available as fallback
+      if (cached) {
+        return cached.id;
+      }
+      return 1;
     }
   }
 
