@@ -124,11 +124,17 @@ export class TradesController {
         },
       });
 
-      // Calculate stats
-      const totalTrades = trades.length;
-      const totalProfit = trades.reduce((sum, t) => sum + (t.profitLoss || 0), 0);
-      const winningTrades = trades.filter(t => (t.profitLoss || 0) > 0).length;
-      const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
+      // Calculate stats - only count CLOSED trades for win rate (trades with exitPrice set)
+      const closedTrades = trades.filter(t => t.exitPrice !== null);
+      const openTrades = trades.filter(t => t.exitPrice === null && t.side === 'buy');
+      
+      const totalClosedTrades = closedTrades.length;
+      const totalProfit = closedTrades.reduce((sum, t) => sum + (t.profitLoss || 0), 0);
+      const winningTrades = closedTrades.filter(t => (t.profitLoss || 0) > 0).length;
+      const winRate = totalClosedTrades > 0 ? (winningTrades / totalClosedTrades) * 100 : 0;
+      
+      // Total trades = closed trades + open positions
+      const totalTrades = totalClosedTrades + openTrades.length;
 
       // Calculate today's PnL
       const todayProfit = todayTrades.reduce((sum, t) => sum + (t.profitLoss || 0), 0);

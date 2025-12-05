@@ -799,6 +799,7 @@ export class StrategiesService {
               const profitLoss = (actualPrice - openTrade.entryPrice!) * openTrade.quantity;
               const profitPercent = ((actualPrice - openTrade.entryPrice!) / openTrade.entryPrice!) * 100;
 
+              // Update the BUY trade with exit info
               await this.prisma.trade.update({
                 where: { id: openTrade.id },
                 data: {
@@ -807,6 +808,28 @@ export class StrategiesService {
                   profitPercent,
                   orderId: orderId ? `${openTrade.orderId || ''} / ${orderId}` : openTrade.orderId,
                   comment: orderId ? 'Exit signal - order filled' : 'Exit signal - order failed'
+                }
+              });
+              
+              // Also create a separate SELL trade record for the trades list
+              await this.prisma.trade.create({
+                data: {
+                  userId: job.userId,
+                  strategyRunId: job.runId,
+                  symbol,
+                  side: 'sell',
+                  type: 'market',
+                  quantity: openTrade.quantity,
+                  price: actualPrice,
+                  amount: openTrade.quantity * actualPrice,
+                  entryPrice: openTrade.entryPrice,
+                  exitPrice: actualPrice,
+                  profitLoss,
+                  profitPercent,
+                  status: orderId ? 'filled' : 'failed',
+                  orderId,
+                  executedAt: new Date(),
+                  comment: `Sold position (Entry: $${openTrade.entryPrice?.toFixed(2)}, P/L: $${profitLoss.toFixed(2)})`
                 }
               });
 
