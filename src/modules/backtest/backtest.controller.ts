@@ -201,6 +201,18 @@ export class BacktestController {
     return this.backtestService.deleteBacktestResult(parseInt(id), userId);
   }
 
+  // Get trades for a preset strategy
+  @Get('preset-strategies/:id/trades')
+  getStrategyTrades(@Param('id') id: string) {
+    return this.backtestService.getStrategyTrades(id);
+  }
+
+  // Get full strategy details with trades and metrics
+  @Get('preset-strategies/:id/details')
+  getStrategyDetails(@Param('id') id: string) {
+    return this.backtestService.getStrategyDetails(id);
+  }
+
   // Data status and management
   @Get('data/status')
   getDataStatus() {

@@ -749,4 +749,124 @@ print(json.dumps(result))
       isUpdating: this.isUpdatingData,
     };
   }
+
+  // Get trades for a preset strategy from CSV
+  getStrategyTrades(strategyId: string, limit = 100): { trades: any[]; total: number } {
+    // Map strategy ID to folder name
+    const folderMap: Record<string, string> = {
+      'rsi-ma-bb-long': 'RSI_MA_BB_Long_Strategy',
+      'rsi-ma-bb-short': 'RSI_MA_BB_Short_Strategy',
+    };
+
+    const folderName = folderMap[strategyId];
+    if (!folderName) {
+      return { trades: [], total: 0 };
+    }
+
+    const csvPath = path.join(this.staticDir, 'backtest_results', folderName, 'all_trades_combined.csv');
+    
+    if (!fs.existsSync(csvPath)) {
+      this.logger.warn(`Trades CSV not found: ${csvPath}`);
+      return { trades: [], total: 0 };
+    }
+
+    try {
+      const content = fs.readFileSync(csvPath, 'utf-8');
+      const lines = content.trim().split('\n');
+      const headers = lines[0].split(',');
+      
+      // Filter only actual trades (BUY, SELL, EXIT), not HOUR CHECK
+      const allTrades: any[] = [];
+      
+      for (let i = 1; i < lines.length; i++) {
+        const values = lines[i].split(',');
+        const action = values[headers.indexOf('action')];
+        
+        // Only include actual trades
+        if (action === 'BUY' || action === 'SELL' || action === 'EXIT' || 
+            action?.includes('Exit') || action?.includes('entry') || action?.includes('Entry')) {
+          const trade: Record<string, any> = {};
+          headers.forEach((header, idx) => {
+            const value = values[idx];
+            // Parse numbers where appropriate
+            if (['price', 'profit_loss', 'balance', 'order_size', 'trade_size', 'drawdown', 'max_drawdown'].includes(header)) {
+              trade[header] = parseFloat(value) || 0;
+            } else {
+              trade[header] = value;
+            }
+          });
+          allTrades.push(trade);
+        }
+      }
+
+      // Return most recent trades first
+      const sortedTrades = allTrades.reverse();
+      
+      return {
+        trades: sortedTrades.slice(0, limit),
+        total: sortedTrades.length,
+      };
+    } catch (error) {
+      this.logger.error(`Error reading trades CSV: ${(error as Error).message}`);
+      return { trades: [], total: 0 };
+    }
+  }
+
+  // Get strategy metrics and trades combined
+  getStrategyDetails(strategyId: string) {
+    const template = this.strategyTemplates[strategyId];
+    if (!template) {
+      return null;
+    }
+
+    // Get trades
+    const { trades, total } = this.getStrategyTrades(strategyId, 200);
+    
+    // Load summary metrics from CSV if available
+    const folderMap: Record<string, string> = {
+      'rsi-ma-bb-long': 'RSI_MA_BB_Long_Strategy',
+      'rsi-ma-bb-short': 'RSI_MA_BB_Short_Strategy',
+    };
+    
+    const folderName = folderMap[strategyId];
+    let metrics = null;
+    
+    if (folderName) {
+      const metricsPath = path.join(this.staticDir, 'backtest_results', folderName, 'backtest_summary_metrics.csv');
+      if (fs.existsSync(metricsPath)) {
+        try {
+          const content = fs.readFileSync(metricsPath, 'utf-8');
+          const lines = content.trim().split('\n');
+          if (lines.length >= 2) {
+            const headers = lines[0].split(',');
+            const values = lines[1].split(',');
+            metrics = {};
+            headers.forEach((header, idx) => {
+              const value = values[idx];
+              const numValue = parseFloat(value);
+              (metrics as Record<string, any>)[header] = isNaN(numValue) ? value : numValue;
+            });
+          }
+        } catch (e) {
+          this.logger.warn(`Could not read metrics: ${(e as Error).message}`);
+        }
+      }
+    }
+
+    return {
+      id: strategyId,
+      name: template.name,
+      description: template.description,
+      category: template.category,
+      pairs: template.pairs,
+      direction: (template as any).direction || 'long',
+      config: {
+        entry_conditions: template.entry_conditions,
+        exit_conditions: template.exit_conditions,
+      },
+      trades,
+      totalTrades: total,
+      metrics,
+    };
+  }
 }
