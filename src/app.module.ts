@@ -8,6 +8,7 @@ import { PaymentsModule } from './modules/payments/payments.module';
 import { BacktestModule } from './modules/backtest/backtest.module';
 import { TradesModule } from './modules/trades/trades.module';
 import { RefundModule } from './modules/refund/refund.module';
+import { UserModule } from './modules/user/user.module';
 import { ConfigModule } from '@nestjs/config';
 import { HealthController } from './health.controller';
 
@@ -22,6 +23,7 @@ import { HealthController } from './health.controller';
     BacktestModule,
     TradesModule,
     RefundModule,
+    UserModule,
     AuthModule,
   ],
   controllers: [HealthController],

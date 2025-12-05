@@ -15,6 +15,7 @@ model User {
   name                String?
   phone               String?
   country             String?
+  profilePhoto        String?   // URL or base64 of profile photo
   
   // Exchange credentials (encrypted) - legacy, use ExchangeConnection instead
   binanceApiKeyEnc    String?

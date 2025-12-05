@@ -38,35 +38,48 @@ export class StrategiesController {
       orderSize: number;
     }
   ) {
-    const userId = this.getUserId(req);
-    const exchangeName = body.exchange || 'binance';
-    const conn = this.exchange.getConnection(exchangeName, userId);
-    
-    if (!conn?.instance) {
-      return { error: `${exchangeName} not connected. Please connect your account first on the Connect page.` };
+    try {
+      const userId = this.getUserId(req);
+      const exchangeName = body.exchange || 'binance';
+      const conn = this.exchange.getConnection(exchangeName, userId);
+      
+      if (!conn?.instance) {
+        return { error: `${exchangeName} not connected. Please connect your account first on the Connect page.` };
+      }
+
+      // Parse config safely
+      let config;
+      try {
+        config = typeof body.config === 'string' ? JSON.parse(body.config) : body.config;
+      } catch (e) {
+        return { error: 'Invalid strategy configuration' };
+      }
+
+      // Create a temp strategy and start it
+      const strategy = await this.strategies.saveStrategy(userId, {
+        name: `Live: ${body.strategyId}`,
+        description: `Started from preset ${body.strategyId}`,
+        config,
+        pairs: [body.symbol],
+        orderSize: body.orderSize,
+      });
+
+      const result = await this.strategies.startStrategy(
+        userId,
+        strategy.id,
+        conn.instance,
+        body.orderSize * 5 // Use 5x order size as initial balance
+      );
+
+      return { 
+        ...result, 
+        message: 'Strategy started successfully! Check your Dashboard to monitor.',
+        strategyId: strategy.id 
+      };
+    } catch (error) {
+      console.error('Error starting strategy:', error);
+      return { error: error.message || 'Failed to start strategy. Please try again.' };
     }
-
-    // Create a temp strategy and start it
-    const strategy = await this.strategies.saveStrategy(userId, {
-      name: `Live: ${body.strategyId}`,
-      description: `Started from preset ${body.strategyId}`,
-      config: JSON.parse(body.config),
-      pairs: [body.symbol],
-      orderSize: body.orderSize,
-    });
-
-    const result = await this.strategies.startStrategy(
-      userId,
-      strategy.id,
-      conn.instance,
-      body.orderSize * 5 // Use 5x order size as initial balance
-    );
-
-    return { 
-      ...result, 
-      message: 'Strategy started successfully! Check your Dashboard to monitor.',
-      strategyId: strategy.id 
-    };
   }
 
   // Get user's saved strategies
