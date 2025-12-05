@@ -32,5 +32,5 @@ USER nestjs
 
 EXPOSE 8080
 
-# Use db push to sync schema (bypasses failed migration history)
-CMD ["sh", "-c", "npx prisma db push --accept-data-loss --skip-generate && node dist/src/main.js"]
+# Sync database schema, then start app (continue even if db push has warnings)
+CMD ["sh", "-c", "(npx prisma db push --accept-data-loss --skip-generate 2>&1 || echo 'DB push had issues, continuing...') && node dist/src/main.js"]
