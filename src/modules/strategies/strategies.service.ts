@@ -879,7 +879,25 @@ export class StrategiesService {
         for (const trade of openTrades) {
           try {
             const exchange = job.exchangeInstance;
-            const preciseQty = String(exchange.amountToPrecision(trade.symbol, trade.quantity) || trade.quantity);
+            
+            // Get actual balance to account for fees that were deducted
+            const baseAsset = trade.symbol.split('/')[0]; // e.g., "BTC" from "BTC/USDT"
+            let sellQty = trade.quantity;
+            
+            try {
+              const balance = await exchange.fetchBalance();
+              const availableBalance = balance[baseAsset]?.free || 0;
+              
+              // Use the smaller of: recorded quantity or actual available balance
+              if (availableBalance > 0 && availableBalance < trade.quantity) {
+                this.logger.log(`[${jobId}] Adjusting sell qty from ${trade.quantity} to ${availableBalance} (fees deducted)`);
+                sellQty = availableBalance;
+              }
+            } catch (balanceErr: any) {
+              this.logger.warn(`[${jobId}] Could not fetch balance, using recorded qty: ${balanceErr.message}`);
+            }
+            
+            const preciseQty = String(exchange.amountToPrecision(trade.symbol, sellQty) || sellQty);
             
             this.logger.log(`[${jobId}] Closing position: SELL ${preciseQty} ${trade.symbol}`);
             const order: any = await (exchange as any).createOrder(trade.symbol, 'market', 'sell', preciseQty);
