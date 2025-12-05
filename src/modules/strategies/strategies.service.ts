@@ -697,8 +697,13 @@ export class StrategiesService {
             
             if (entryMet) {
               // Execute buy - ACTUALLY PLACE ORDER ON EXCHANGE
-              // Use job.orderSize (the user's specified $ amount per trade)
-              const quantity = job.orderSize / currentPrice;
+              // Binance minimum notional is ~$5-10, enforce $10 minimum
+              const effectiveOrderSize = Math.max(job.orderSize, 10);
+              if (job.orderSize < 10) {
+                this.logger.warn(`[${job.id}] Order size $${job.orderSize} below Binance minimum, using $${effectiveOrderSize}`);
+              }
+              
+              const quantity = effectiveOrderSize / currentPrice;
               const preciseQty = String(exchange.amountToPrecision(symbol, quantity) || quantity);
               
               this.logger.log(`[${job.id}] Order size: $${job.orderSize}, Qty: ${preciseQty} ${symbol}`);
