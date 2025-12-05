@@ -841,8 +841,9 @@ export class StrategiesService {
       }
     });
 
+    // Update strategy to inactive (use run.strategyId since job might not exist)
     await this.prisma.strategy.update({
-      where: { id: job.strategyId },
+      where: { id: run.strategyId },
       data: { isActive: false }
     });
 
