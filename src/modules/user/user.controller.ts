@@ -15,6 +15,10 @@ interface AuthenticatedRequest extends Request {
 @UseGuards(JwtAuthGuard)
 @Controller('user')
 export class UserController {
+  // Cache for user lookups
+  private userCache: Map<string, { user: any; timestamp: number }> = new Map();
+  private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
   constructor(private readonly prisma: PrismaService) {}
 
   // Get the supabase UUID from JWT
@@ -26,45 +30,79 @@ export class UserController {
     return req.user?.email || '';
   }
   
-  // Find or create user by supabaseId
-  private async findOrCreateUser(supabaseId: string, email: string) {
-    if (!supabaseId && !email) {
-      throw new Error('No user identifier provided');
-    }
-    
-    // First try to find by supabaseId
-    let user = await this.prisma.user.findFirst({
-      where: { supabaseId },
-    });
-    
-    // If not found, try by email
-    if (!user && email) {
-      user = await this.prisma.user.findUnique({
-        where: { email },
-      });
-      
-      // If found by email, update the supabaseId
-      if (user && supabaseId) {
-        user = await this.prisma.user.update({
-          where: { id: user.id },
-          data: { supabaseId },
-        });
+  // Retry wrapper for database operations
+  private async withRetry<T>(operation: () => Promise<T>, retries = 2): Promise<T> {
+    for (let i = 0; i <= retries; i++) {
+      try {
+        return await operation();
+      } catch (e: any) {
+        const isConnectionError = e.message?.includes("Can't reach database") || 
+                                  e.code === 'P1001' || 
+                                  e.code === 'P1002';
+        if (isConnectionError && i < retries) {
+          console.log(`DB connection failed, retrying (${i + 1}/${retries})...`);
+          await new Promise(resolve => setTimeout(resolve, 500 * (i + 1))); // Exponential backoff
+          continue;
+        }
+        throw e;
       }
     }
-    
-    // If still not found, create new user
-    if (!user && email) {
-      user = await this.prisma.user.create({
-        data: {
-          email,
-          supabaseId,
-          xp: 0,
-          level: 1,
-        },
-      });
+    throw new Error('Max retries exceeded');
+  }
+  
+  // Find or create user by supabaseId (with caching and retry)
+  private async findOrCreateUser(supabaseId: string, email: string) {
+    if (!supabaseId && !email) {
+      return null;
     }
     
-    return user;
+    // Check cache first
+    const cacheKey = supabaseId || email;
+    const cached = this.userCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      return cached.user;
+    }
+    
+    return this.withRetry(async () => {
+      // First try to find by supabaseId
+      let user = supabaseId ? await this.prisma.user.findFirst({
+        where: { supabaseId },
+      }) : null;
+      
+      // If not found, try by email
+      if (!user && email) {
+        user = await this.prisma.user.findUnique({
+          where: { email },
+        });
+        
+        // If found by email, update the supabaseId
+        if (user && supabaseId) {
+          user = await this.prisma.user.update({
+            where: { id: user.id },
+            data: { supabaseId },
+          });
+        }
+      }
+      
+      // If still not found, create new user
+      if (!user && email) {
+        user = await this.prisma.user.create({
+          data: {
+            email,
+            supabaseId: supabaseId || undefined,
+            xp: 0,
+            level: 1,
+          },
+        });
+      }
+      
+      // Cache the result
+      if (user) {
+        this.userCache.set(cacheKey, { user, timestamp: Date.now() });
+      }
+      
+      return user;
+    });
   }
 
   @Get('profile')
