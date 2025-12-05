@@ -90,7 +90,8 @@ export class StrategiesController {
       exchange: string;
       symbol: string;
       timeframe: string;
-      orderSize: number;
+      orderSize: number; // $ amount per trade
+      maxBudget?: number; // Max loss before closing all (defaults to 5x orderSize)
     }
   ) {
     try {
@@ -110,25 +111,31 @@ export class StrategiesController {
         return { error: 'Invalid strategy configuration' };
       }
 
+      const orderSize = body.orderSize || 10; // Default $10 per trade
+      const maxBudget = body.maxBudget || orderSize * 5; // Default: can lose 5x order size
+
+      console.log(`Starting strategy: orderSize=$${orderSize}, maxBudget=$${maxBudget}`);
+
       // Create a temp strategy and start it
       const strategy = await this.strategies.saveStrategy(userId, {
         name: `Live: ${body.strategyId}`,
         description: `Started from preset ${body.strategyId}`,
         config,
         pairs: [body.symbol],
-        orderSize: body.orderSize,
+        orderSize,
       });
 
       const result = await this.strategies.startStrategy(
         userId,
         strategy.id,
         conn.instance,
-        body.orderSize * 5 // Use 5x order size as initial balance
+        maxBudget, // Max loss budget
+        orderSize  // Order size per trade
       );
 
       return { 
         ...result, 
-        message: 'Strategy started successfully! Check your Dashboard to monitor.',
+        message: `Strategy started! Order size: $${orderSize}, Max budget: $${maxBudget}`,
         strategyId: strategy.id 
       };
     } catch (error) {
@@ -206,7 +213,7 @@ export class StrategiesController {
   async startStrategy(
     @Req() req: AuthenticatedRequest,
     @Param('id') id: string,
-    @Body() body: { initialBalance?: number; exchange?: string }
+    @Body() body: { orderSize?: number; maxBudget?: number; exchange?: string }
   ) {
     const userId = await this.getUserId(req);
     const exchangeName = body.exchange || 'binance';
@@ -216,16 +223,20 @@ export class StrategiesController {
       return { error: `${exchangeName} not connected. Please connect your exchange account first on the Connect page.` };
     }
 
+    const orderSize = body.orderSize || 10;
+    const maxBudget = body.maxBudget || orderSize * 5;
+
     const result = await this.strategies.startStrategy(
       userId,
       parseInt(id),
       conn.instance,
-      body.initialBalance || 5000
+      maxBudget,
+      orderSize
     );
 
     return {
       ...result,
-      message: 'Strategy started successfully! Check your Dashboard to monitor.',
+      message: `Strategy started! Order size: $${orderSize}, Max budget: $${maxBudget}`,
     };
   }
 

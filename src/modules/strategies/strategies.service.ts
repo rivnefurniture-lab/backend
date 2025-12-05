@@ -13,12 +13,15 @@ interface ActiveJob {
   exchangeInstance: Exchange; // Keep reference to close positions
   symbols: string[];
   config: any;
+  orderSize: number; // $ amount per trade
+  maxBudget: number; // Max loss before closing all positions
   timer: NodeJS.Timeout;
   status: 'running' | 'paused' | 'error';
   stats: {
     trades: number;
     wins: number;
     profit: number;
+    unrealizedPnL: number;
     lastCheck: Date;
   };
 }
@@ -374,7 +377,8 @@ export class StrategiesService {
     userId: number | string,
     strategyId: number,
     exchangeInstance: Exchange,
-    initialBalance: number
+    maxBudget: number, // Max amount user is willing to lose
+    orderSizeOverride?: number // Override order size from strategy
   ) {
     const numericUserId = await this.resolveUserId(userId);
     const strategy = await this.prisma.strategy.findFirst({
@@ -394,6 +398,7 @@ export class StrategiesService {
 
     const config = JSON.parse(strategy.config);
     const pairs = JSON.parse(strategy.pairs);
+    const orderSize = orderSizeOverride || strategy.orderSize || 10; // Default to $10
 
     // Create strategy run record
     const run = await this.prisma.strategyRun.create({
@@ -403,11 +408,13 @@ export class StrategiesService {
         config: strategy.config,
         pairs: strategy.pairs,
         exchange: 'binance',
-        initialBalance,
-        currentBalance: initialBalance,
+        initialBalance: maxBudget,
+        currentBalance: maxBudget,
         status: 'running'
       }
     });
+
+    this.logger.log(`Starting strategy ${strategyId}: orderSize=$${orderSize}, maxBudget=$${maxBudget}`);
 
     // Create job
     const jobId = `run_${run.id}`;
@@ -417,15 +424,18 @@ export class StrategiesService {
       strategyId,
       userId: numericUserId,
       exchange: 'binance',
-      exchangeInstance: exchangeInstance, // Keep reference for closing positions
+      exchangeInstance: exchangeInstance,
       symbols: pairs,
       config,
+      orderSize, // Actual $ amount per trade
+      maxBudget, // Max loss before closing all
       status: 'running',
       timer: null as any,
       stats: {
         trades: 0,
         wins: 0,
         profit: 0,
+        unrealizedPnL: 0,
         lastCheck: new Date()
       }
     };
@@ -460,6 +470,65 @@ export class StrategiesService {
   // Execute one trading tick
   private async executeTradingTick(job: ActiveJob, exchange: Exchange) {
     try {
+      // First, check if we've exceeded max budget (unrealized loss)
+      const openTrades = await this.prisma.trade.findMany({
+        where: {
+          strategyRunId: job.runId,
+          side: 'buy',
+          status: 'filled',
+          exitPrice: null
+        }
+      });
+      
+      // Calculate unrealized P&L across all open positions
+      let unrealizedPnL = 0;
+      for (const trade of openTrades) {
+        try {
+          const ticker = await exchange.fetchTicker(trade.symbol);
+          const currentPrice = ticker.last || ticker.close || trade.price;
+          const pnl = (currentPrice - trade.entryPrice!) * trade.quantity;
+          unrealizedPnL += pnl;
+        } catch {
+          // Use entry price if can't fetch current
+        }
+      }
+      
+      job.stats.unrealizedPnL = unrealizedPnL;
+      
+      // Check if total loss (realized + unrealized) exceeds max budget
+      const totalLoss = Math.abs(Math.min(0, job.stats.profit + unrealizedPnL));
+      if (totalLoss >= job.maxBudget) {
+        this.logger.warn(`[${job.id}] MAX BUDGET EXCEEDED! Loss: $${totalLoss.toFixed(2)} >= Budget: $${job.maxBudget}`);
+        this.logger.warn(`[${job.id}] EMERGENCY: Closing all ${openTrades.length} positions`);
+        
+        // Close all positions immediately
+        for (const trade of openTrades) {
+          try {
+            const preciseQty = String(exchange.amountToPrecision(trade.symbol, trade.quantity) || trade.quantity);
+            const order: any = await (exchange as any).createOrder(trade.symbol, 'market', 'sell', preciseQty);
+            const exitPrice = order.average || order.price || trade.price;
+            
+            await this.prisma.trade.update({
+              where: { id: trade.id },
+              data: {
+                exitPrice,
+                profitLoss: (exitPrice - trade.entryPrice!) * trade.quantity,
+                profitPercent: ((exitPrice - trade.entryPrice!) / trade.entryPrice!) * 100,
+                comment: 'EMERGENCY CLOSE: Max budget exceeded'
+              }
+            });
+            
+            this.logger.log(`[${job.id}] Emergency closed ${trade.symbol}`);
+          } catch (e: any) {
+            this.logger.error(`[${job.id}] Failed to emergency close ${trade.symbol}: ${e.message}`);
+          }
+        }
+        
+        // Stop the strategy
+        await this.stopStrategy(job.userId, job.runId);
+        return;
+      }
+      
       const config = job.config;
       const entryConditions = config.entry_conditions || config.bullish_entry_conditions || [];
       const exitConditions = config.exit_conditions || config.bullish_exit_conditions || [];
@@ -521,8 +590,11 @@ export class StrategiesService {
             // Check entry conditions
             if (this.checkConditions(entryConditions, indicators, prevIndicators)) {
               // Execute buy - ACTUALLY PLACE ORDER ON EXCHANGE
-              const quantity = (config.orderSize || 1000) / currentPrice;
+              // Use job.orderSize (the user's specified $ amount per trade)
+              const quantity = job.orderSize / currentPrice;
               const preciseQty = String(exchange.amountToPrecision(symbol, quantity) || quantity);
+              
+              this.logger.log(`[${job.id}] Order size: $${job.orderSize}, Qty: ${preciseQty} ${symbol}`);
               
               let orderId: string | undefined;
               let actualPrice = currentPrice;

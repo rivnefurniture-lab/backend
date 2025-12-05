@@ -16,5 +16,5 @@ export class ConnectDto {
 
   @IsOptional()
   @IsBoolean()
-  testnet?: boolean = true;
+  testnet?: boolean = false; // Default to REAL MONEY (not testnet)
 }
