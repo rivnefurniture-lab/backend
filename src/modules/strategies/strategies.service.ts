@@ -622,13 +622,27 @@ export class StrategiesService {
       const entryConditions = config.entry_conditions || config.bullish_entry_conditions || [];
       const exitConditions = config.exit_conditions || config.bullish_exit_conditions || [];
       
-      // Get timeframe from config or entry conditions
-      const timeframe = config.timeframe || 
-        entryConditions[0]?.subfields?.Timeframe || 
-        '1m'; // Default to 1m for faster testing
+      // Get parameters from each condition type
+      const rsiCondition = entryConditions.find((c: any) => c.indicator === 'RSI');
+      const maCondition = entryConditions.find((c: any) => c.indicator === 'MA');
+      const bbCondition = exitConditions.find((c: any) => c.indicator === 'BollingerBands');
       
-      // Get RSI length from conditions
-      const rsiLength = entryConditions.find((c: any) => c.indicator === 'RSI')?.subfields?.['RSI Length'] || 14;
+      // Extract timeframes (ideally different for each indicator)
+      const rsiTimeframe = rsiCondition?.subfields?.Timeframe || '15m';
+      const maTimeframe = maCondition?.subfields?.Timeframe || '1h';
+      const bbTimeframe = bbCondition?.subfields?.Timeframe || '4h';
+      
+      // Use the shortest timeframe for the main loop
+      const timeframe = rsiTimeframe;
+      
+      // Get indicator parameters from config
+      const rsiLength = rsiCondition?.subfields?.['RSI Length'] || 28;
+      const maFastPeriod = maCondition?.subfields?.['Fast MA'] || 50;
+      const maSlowPeriod = maCondition?.subfields?.['Slow MA'] || 200;
+      const bbPeriod = bbCondition?.subfields?.['BB% Period'] || 20;
+      const bbDeviation = bbCondition?.subfields?.['Deviation'] || 1;
+      
+      this.logger.log(`[${job.id}] Config: RSI(${rsiLength})@${rsiTimeframe}, MA(${maFastPeriod}/${maSlowPeriod})@${maTimeframe}, BB(${bbPeriod},${bbDeviation})@${bbTimeframe}`);
 
       for (const symbol of job.symbols) {
         try {
@@ -638,21 +652,21 @@ export class StrategiesService {
           const closes = ohlcv.map(c => c[4] as number);
           const currentPrice = closes[closes.length - 1];
 
-          // Calculate indicators with configured periods
+          // Calculate indicators with configured periods from strategy config
           const indicators: IndicatorValues = {
             close: currentPrice,
             prevClose: closes[closes.length - 2],
             rsi: this.calculateRSI(closes, rsiLength) ?? undefined,
             prevRsi: this.calculateRSI(closes.slice(0, -1), rsiLength) ?? undefined,
-            smaFast: this.calculateSMA(closes, 20) ?? undefined,
-            smaSlow: this.calculateSMA(closes, 50) ?? undefined,
-            prevSmaFast: this.calculateSMA(closes.slice(0, -1), 20) ?? undefined,
-            prevSmaSlow: this.calculateSMA(closes.slice(0, -1), 50) ?? undefined,
-            bbPercent: this.calculateBBPercent(closes, 20, 2) ?? undefined,
-            prevBbPercent: this.calculateBBPercent(closes.slice(0, -1), 20, 2) ?? undefined,
+            smaFast: this.calculateSMA(closes, maFastPeriod) ?? undefined,
+            smaSlow: this.calculateSMA(closes, maSlowPeriod) ?? undefined,
+            prevSmaFast: this.calculateSMA(closes.slice(0, -1), maFastPeriod) ?? undefined,
+            prevSmaSlow: this.calculateSMA(closes.slice(0, -1), maSlowPeriod) ?? undefined,
+            bbPercent: this.calculateBBPercent(closes, bbPeriod, bbDeviation) ?? undefined,
+            prevBbPercent: this.calculateBBPercent(closes.slice(0, -1), bbPeriod, bbDeviation) ?? undefined,
           };
           
-          this.logger.log(`[${job.id}] ${symbol} Price: $${currentPrice.toFixed(2)}, RSI(${rsiLength}): ${indicators.rsi?.toFixed(2)}`);
+          this.logger.log(`[${job.id}] ${symbol} Price: $${currentPrice.toFixed(2)}, RSI(${rsiLength}): ${indicators.rsi?.toFixed(2)}, SMA(${maFastPeriod}/${maSlowPeriod}): ${indicators.smaFast?.toFixed(2)}/${indicators.smaSlow?.toFixed(2)}, BB%B: ${indicators.bbPercent?.toFixed(3)}`);
 
           const macd = this.calculateMACD(closes);
           const prevMacd = this.calculateMACD(closes.slice(0, -1));
