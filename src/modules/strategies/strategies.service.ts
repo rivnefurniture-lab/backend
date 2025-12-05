@@ -746,6 +746,16 @@ export class StrategiesService {
 
               job.stats.trades++;
               this.logger.log(`[${job.id}] BUY ${symbol} @ ${actualPrice} (Order: ${orderId || 'FAILED'})`);
+              
+              // Update run stats after BUY too
+              await this.prisma.strategyRun.update({
+                where: { id: job.runId },
+                data: {
+                  totalTrades: job.stats.trades,
+                  winningTrades: job.stats.wins,
+                  totalProfit: job.stats.profit
+                }
+              });
             }
           } else {
             // Check exit conditions - handle TIME_ELAPSED specially
