@@ -45,7 +45,9 @@ export class StrategiesService {
   private jobs: Map<string, ActiveJob> = new Map();
   private indicatorCache: Map<string, any[]> = new Map();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) {
+    this.logger.log('StrategiesService initialized');
+  }
 
   // Helper to resolve userId - handles both numeric IDs and supabaseId strings
   private async resolveUserId(userId: number | string): Promise<number> {
