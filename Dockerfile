@@ -32,5 +32,5 @@ USER nestjs
 
 EXPOSE 8080
 
-# Sync database schema, then start app (continue even if db push has warnings)
-CMD ["sh", "-c", "(npx prisma db push --accept-data-loss --skip-generate 2>&1 || echo 'DB push had issues, continuing...') && node dist/src/main.js"]
+# Start app directly - the app has built-in database retry logic
+CMD ["node", "dist/src/main.js"]
