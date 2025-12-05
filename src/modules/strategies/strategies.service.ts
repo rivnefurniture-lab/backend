@@ -5,14 +5,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { Exchange } from 'ccxt';
 import { spawn } from 'child_process';
 import * as path from 'path';
-
-interface PythonSignalResult {
-  symbol: string;
-  signal: 'BUY' | 'SELL' | 'HOLD';
-  indicators: Record<string, any>;
-  reason: string;
-  error?: string;
-}
+import * as fs from 'fs';
 
 interface ActiveJob {
   id: string;
@@ -20,11 +13,11 @@ interface ActiveJob {
   strategyId: number;
   userId: number;
   exchange: string;
-  exchangeInstance: Exchange; // Keep reference to close positions
+  exchangeInstance: Exchange;
   symbols: string[];
   config: any;
-  orderSize: number; // $ amount per trade
-  maxBudget: number; // Max loss before closing all positions
+  orderSize: number;
+  maxBudget: number;
   timer: NodeJS.Timeout;
   status: 'running' | 'paused' | 'error';
   stats: {
@@ -36,50 +29,36 @@ interface ActiveJob {
   };
 }
 
-interface IndicatorValues {
-  rsi?: number;
-  prevRsi?: number;
-  macdLine?: number;
-  macdSignal?: number;
-  prevMacdLine?: number;
-  prevMacdSignal?: number;
-  smaFast?: number;
-  smaSlow?: number;
-  prevSmaFast?: number;
-  prevSmaSlow?: number;
-  bbPercent?: number;
-  prevBbPercent?: number;
+interface ParquetRow {
+  timestamp: string;
+  open: number;
+  high: number;
+  low: number;
   close: number;
-  prevClose?: number;
+  volume: number;
+  [key: string]: any; // RSI_14, SMA_50, BB_%B_20_2, etc.
 }
 
 @Injectable()
 export class StrategiesService {
   private readonly logger = new Logger(StrategiesService.name);
   private jobs: Map<string, ActiveJob> = new Map();
-  private indicatorCache: Map<string, any[]> = new Map();
-  // Cache for userId resolution (supabaseId -> numeric userId)
   private userIdCache: Map<string, { id: number; timestamp: number }> = new Map();
-  private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+  private readonly CACHE_TTL = 5 * 60 * 1000;
+  private readonly staticDir = path.join(__dirname, '..', '..', '..', 'static');
 
   constructor(private readonly prisma: PrismaService) {
     this.logger.log('StrategiesService initialized');
   }
 
-  // Helper to resolve userId - handles both numeric IDs and supabaseId strings
+  // Resolve userId (supabaseId string -> numeric id)
   private async resolveUserId(userId: number | string): Promise<number> {
-    if (typeof userId === 'number') {
-      return userId;
-    }
+    if (typeof userId === 'number') return userId;
     
-    // Check cache first
     const cached = this.userIdCache.get(userId);
     if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
       return cached.id;
     }
-    
-    // It's a supabaseId string - look up the actual user
-    const startTime = Date.now();
     
     try {
       let user = await this.prisma.user.findFirst({
@@ -87,14 +66,7 @@ export class StrategiesService {
         select: { id: true },
       });
       
-      const elapsed = Date.now() - startTime;
-      if (elapsed > 1000) {
-        this.logger.warn(`Slow user resolution: ${elapsed}ms for ${userId}`);
-      }
-      
       if (!user) {
-        // Try to create the user if they don't exist
-        this.logger.log(`User not found for supabaseId ${userId}, creating...`);
         user = await this.prisma.user.create({
           data: {
             supabaseId: userId,
@@ -106,616 +78,311 @@ export class StrategiesService {
         });
       }
       
-      // Cache the result
       this.userIdCache.set(userId, { id: user.id, timestamp: Date.now() });
-      
       return user.id;
-    } catch (e) {
+    } catch (e: any) {
       this.logger.error(`Failed to resolve userId: ${e.message}`);
-      // Return cached value if available (even if expired) as fallback
-      if (cached) {
-        this.logger.warn(`Using expired cache for ${userId}`);
-        return cached.id;
-      }
+      if (cached) return cached.id;
       throw new BadRequestException('Could not resolve user');
     }
   }
 
-  // Call Python script for signal generation - mirrors backtest logic exactly
-  private async getPythonSignal(config: {
-    exchange: string;
-    symbol: string;
-    entry_conditions: any[];
-    exit_conditions: any[];
-    has_position: boolean;
-    position_entry_time?: string;
-  }): Promise<PythonSignalResult> {
-    return new Promise((resolve, reject) => {
-      const scriptPath = path.join(__dirname, '..', '..', '..', 'scripts', 'live_signals.py');
-      const configJson = JSON.stringify(config);
+  // Read latest data from parquet files using Python
+  private async readLatestFromParquet(symbol: string): Promise<ParquetRow | null> {
+    return new Promise((resolve) => {
+      const symbolClean = symbol.replace('/', '').replace('USDT', '');
+      const parquetPath = path.join(this.staticDir, `${symbolClean}_1m.parquet`);
       
-      const python = spawn('python3', [scriptPath, configJson]);
-      
+      if (!fs.existsSync(parquetPath)) {
+        this.logger.warn(`Parquet file not found: ${parquetPath}`);
+        resolve(null);
+        return;
+      }
+
+      // Use Python to read last row from parquet
+      const script = `
+import pandas as pd
+import json
+import sys
+
+try:
+    df = pd.read_parquet('${parquetPath}')
+    if len(df) > 0:
+        last_row = df.iloc[-1].to_dict()
+        # Convert timestamp to string if needed
+        for k, v in last_row.items():
+            if hasattr(v, 'isoformat'):
+                last_row[k] = v.isoformat()
+            elif pd.isna(v):
+                last_row[k] = None
+        print(json.dumps(last_row))
+    else:
+        print('null')
+except Exception as e:
+    print(f'{{"error": "{str(e)}"}}', file=sys.stderr)
+    print('null')
+`;
+
+      const python = spawn('python3', ['-c', script]);
       let stdout = '';
-      let stderr = '';
       
-      python.stdout.on('data', (data) => {
-        stdout += data.toString();
-      });
+      python.stdout.on('data', (data) => { stdout += data.toString(); });
+      python.stderr.on('data', (data) => { this.logger.debug(`Parquet read: ${data}`); });
       
-      python.stderr.on('data', (data) => {
-        stderr += data.toString();
-        this.logger.debug(`Python signal: ${data.toString().trim()}`);
-      });
-      
-      python.on('close', (code) => {
-        if (code !== 0) {
-          this.logger.warn(`Python signal script exited with code ${code}: ${stderr}`);
-          // Return HOLD on error to avoid bad trades
-          resolve({
-            symbol: config.symbol,
-            signal: 'HOLD',
-            indicators: {},
-            reason: `Python error: ${stderr.substring(0, 100)}`,
-            error: stderr
-          });
-          return;
-        }
-        
+      python.on('close', () => {
         try {
-          const result = JSON.parse(stdout.trim()) as PythonSignalResult;
+          const result = JSON.parse(stdout.trim());
           resolve(result);
-        } catch (parseError) {
-          this.logger.error(`Failed to parse Python signal output: ${stdout}`);
-          resolve({
-            symbol: config.symbol,
-            signal: 'HOLD',
-            indicators: {},
-            reason: 'Failed to parse Python output',
-            error: stdout
-          });
+        } catch {
+          resolve(null);
         }
       });
       
-      python.on('error', (error) => {
-        this.logger.error(`Python spawn error: ${error.message}`);
-        resolve({
-          symbol: config.symbol,
-          signal: 'HOLD',
-          indicators: {},
-          reason: `Spawn error: ${error.message}`,
-          error: error.message
-        });
-      });
-      
-      // Timeout after 30 seconds
-      setTimeout(() => {
-        python.kill();
-        resolve({
-          symbol: config.symbol,
-          signal: 'HOLD',
-          indicators: {},
-          reason: 'Python signal timeout',
-          error: 'Timeout'
-        });
-      }, 30000);
+      python.on('error', () => resolve(null));
+      setTimeout(() => { python.kill(); resolve(null); }, 10000);
     });
   }
 
-  // Calculate RSI
-  private calculateRSI(closes: number[], period: number = 14): number | null {
-    if (closes.length < period + 1) return null;
-    
-    let gains = 0;
-    let losses = 0;
-    
-    for (let i = closes.length - period; i < closes.length; i++) {
-      const diff = closes[i] - closes[i - 1];
-      if (diff >= 0) gains += diff;
-      else losses -= diff;
-    }
-    
-    const avgGain = gains / period;
-    const avgLoss = losses / period;
-    const rs = avgGain / (avgLoss || 1e-9);
-    
-    return 100 - 100 / (1 + rs);
-  }
+  // Check a single condition against parquet data
+  private checkCondition(data: ParquetRow, condition: any): boolean {
+    const { indicator, subfields } = condition;
+    const conditionType = subfields?.Condition || 'Greater Than';
+    const targetValue = subfields?.['Signal Value'] || 0;
 
-  // Calculate SMA
-  private calculateSMA(values: number[], period: number): number | null {
-    if (values.length < period) return null;
-    const slice = values.slice(-period);
-    return slice.reduce((a, b) => a + b, 0) / period;
-  }
+    let currentValue: number | null = null;
+    let compareValue: number | null = null;
 
-  // Calculate EMA
-  private calculateEMA(values: number[], period: number): number[] {
-    if (values.length < period) return [];
-    
-    const ema: number[] = [];
-    const multiplier = 2 / (period + 1);
-    
-    // Start with SMA
-    let sum = 0;
-    for (let i = 0; i < period; i++) {
-      sum += values[i];
-    }
-    ema.push(sum / period);
-    
-    for (let i = period; i < values.length; i++) {
-      ema.push((values[i] - ema[ema.length - 1]) * multiplier + ema[ema.length - 1]);
-    }
-    
-    return ema;
-  }
-
-  // Calculate MACD
-  private calculateMACD(closes: number[], fast = 12, slow = 26, signal = 9): { line: number; signal: number } | null {
-    if (closes.length < slow + signal) return null;
-    
-    const emaFast = this.calculateEMA(closes, fast);
-    const emaSlow = this.calculateEMA(closes, slow);
-    
-    if (emaFast.length === 0 || emaSlow.length === 0) return null;
-    
-    const macdLine: number[] = [];
-    const offset = slow - fast;
-    
-    for (let i = 0; i < emaSlow.length; i++) {
-      if (i + offset < emaFast.length) {
-        macdLine.push(emaFast[i + offset] - emaSlow[i]);
-      }
-    }
-    
-    if (macdLine.length < signal) return null;
-    
-    const signalLine = this.calculateEMA(macdLine, signal);
-    
-    return {
-      line: macdLine[macdLine.length - 1],
-      signal: signalLine[signalLine.length - 1]
-    };
-  }
-
-  // Calculate Bollinger Bands %B
-  private calculateBBPercent(closes: number[], period = 20, deviation = 2): number | null {
-    if (closes.length < period) return null;
-    
-    const slice = closes.slice(-period);
-    const mean = slice.reduce((a, b) => a + b, 0) / period;
-    const variance = slice.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / period;
-    const stdDev = Math.sqrt(variance);
-    
-    const upperBand = mean + deviation * stdDev;
-    const lowerBand = mean - deviation * stdDev;
-    const currentPrice = closes[closes.length - 1];
-    
-    return (currentPrice - lowerBand) / (upperBand - lowerBand || 1);
-  }
-
-  // Check if conditions are met
-  private checkConditions(conditions: any[], indicators: IndicatorValues, prevIndicators?: IndicatorValues): boolean {
-    if (!conditions || conditions.length === 0) {
-      this.logger.log('checkConditions: No conditions, returning true');
-      return true;
+    // Map indicator to parquet column names
+    if (indicator === 'RSI') {
+      const period = subfields?.['RSI Length'] || 14;
+      currentValue = data[`RSI_${period}`];
+      compareValue = targetValue;
+    } else if (indicator === 'MA') {
+      const fastPeriod = subfields?.['Fast MA'] || 50;
+      const slowPeriod = subfields?.['Slow MA'] || 200;
+      const maType = subfields?.['MA Type'] || 'SMA';
+      currentValue = data[`${maType}_${fastPeriod}`];
+      compareValue = data[`${maType}_${slowPeriod}`];
+    } else if (indicator === 'BollingerBands') {
+      const period = subfields?.['BB% Period'] || 20;
+      const dev = subfields?.['Deviation'] || 2;
+      currentValue = data[`BB_%B_${period}_${dev}`];
+      compareValue = targetValue;
+    } else if (indicator === 'MACD') {
+      const preset = subfields?.['MACD Preset'] || '12,26,9';
+      const [fast, slow, signal] = preset.split(',').map(Number);
+      currentValue = data[`MACD_${fast}_${slow}_${signal}`];
+      compareValue = data[`MACD_${fast}_${slow}_${signal}_Signal`];
     }
 
-    for (const cond of conditions) {
-      const indicator = cond.indicator;
-      const subfields = cond.subfields || {};
-      const condition = subfields.Condition || subfields['MACD Trigger'];
-      const targetValue = subfields['Signal Value'];
-      
-      this.logger.log(`checkConditions: Checking ${indicator} ${condition} ${targetValue}`);
+    if (currentValue === null || currentValue === undefined) {
+      return false;
+    }
 
-      let currentValue: number | undefined;
-      let previousValue: number | undefined;
-      let compareValue: number | undefined;
-      let prevCompareValue: number | undefined;
-
-      switch (indicator) {
-        case 'IMMEDIATE':
-          // Always returns true - for immediate entry
-          this.logger.log('checkConditions: IMMEDIATE - always true');
-          continue; // Skip to next condition (or return true if no more)
-          
-        case 'TIME_ELAPSED':
-          // This is handled separately in executeTradingTick
-          // Always return true here - time check is done elsewhere
-          this.logger.log('checkConditions: TIME_ELAPSED - always true (time check done elsewhere)');
-          continue;
-          
-        case 'RSI':
-          currentValue = indicators.rsi;
-          previousValue = prevIndicators?.rsi;
-          break;
-        case 'MA':
-          currentValue = indicators.smaFast;
-          previousValue = prevIndicators?.smaFast;
-          compareValue = indicators.smaSlow;
-          prevCompareValue = prevIndicators?.smaSlow;
-          break;
-        case 'MACD':
-          currentValue = indicators.macdLine;
-          previousValue = prevIndicators?.macdLine;
-          compareValue = indicators.macdSignal;
-          prevCompareValue = prevIndicators?.macdSignal;
-          
-          // Check line trigger if specified
-          const lineTrigger = subfields['Line Trigger'];
-          if (lineTrigger === 'Greater Than 0' && (currentValue ?? 0) <= 0) return false;
-          if (lineTrigger === 'Less Than 0' && (currentValue ?? 0) >= 0) return false;
-          break;
-        case 'BollingerBands':
-          currentValue = indicators.bbPercent;
-          previousValue = prevIndicators?.bbPercent;
-          break;
-        default:
-          // Unknown indicator - skip it
-          this.logger.log(`checkConditions: Unknown indicator ${indicator}, skipping`);
-          continue;
-      }
-
-      if (currentValue === undefined) {
-        this.logger.log(`checkConditions: ${indicator} currentValue is undefined, returning false`);
+    // Evaluate condition
+    switch (conditionType) {
+      case 'Less Than':
+        return currentValue < (compareValue ?? targetValue);
+      case 'Greater Than':
+        return currentValue > (compareValue ?? targetValue);
+      case 'Crossing Up':
+      case 'Crossing Down':
+        // For crossings, we'd need previous values - simplified for now
+        return indicator === 'MA' || indicator === 'MACD'
+          ? currentValue > (compareValue ?? targetValue)
+          : currentValue > targetValue;
+      default:
         return false;
-      }
-      
-      this.logger.log(`checkConditions: ${indicator} currentValue=${currentValue}, targetValue=${targetValue}`);
-
-      // For MA and MACD, compare fast to slow/signal
-      if (indicator === 'MA' || indicator === 'MACD') {
-        if (compareValue === undefined) return false;
-        
-        switch (condition) {
-          case 'Less Than':
-            if (currentValue >= compareValue) return false;
-            break;
-          case 'Greater Than':
-            if (currentValue <= compareValue) return false;
-            break;
-          case 'Crossing Up':
-            if (!prevCompareValue || !previousValue) return false;
-            if (!(previousValue <= prevCompareValue && currentValue > compareValue)) return false;
-            break;
-          case 'Crossing Down':
-            if (!prevCompareValue || !previousValue) return false;
-            if (!(previousValue >= prevCompareValue && currentValue < compareValue)) return false;
-            break;
-        }
-      } else {
-        // For RSI and BB, compare to target value
-        switch (condition) {
-          case 'Less Than':
-            if (currentValue >= targetValue) {
-              this.logger.log(`checkConditions: ${indicator} ${currentValue} >= ${targetValue}, returning false`);
-              return false;
-            }
-            break;
-          case 'Greater Than':
-            if (currentValue <= targetValue) {
-              this.logger.log(`checkConditions: ${indicator} ${currentValue} <= ${targetValue}, returning false`);
-              return false;
-            }
-            break;
-          case 'Crossing Up':
-            if (previousValue === undefined) return false;
-            if (!(previousValue <= targetValue && currentValue > targetValue)) return false;
-            break;
-          case 'Crossing Down':
-            if (previousValue === undefined) return false;
-            if (!(previousValue >= targetValue && currentValue < targetValue)) return false;
-            break;
-        }
-      }
     }
+  }
 
-    this.logger.log('checkConditions: All conditions passed, returning true');
+  // Check all conditions for entry/exit
+  private checkAllConditions(data: ParquetRow, conditions: any[]): boolean {
+    if (!conditions || conditions.length === 0) return false;
+    
+    for (const cond of conditions) {
+      if (cond.indicator === 'IMMEDIATE') return true;
+      if (cond.indicator === 'TIME_ELAPSED') continue; // Handled separately
+      if (!this.checkCondition(data, cond)) return false;
+    }
     return true;
   }
 
-  // Get user's saved strategies (optimized - minimal fields)
+  // Get user's strategies
   async getUserStrategies(userId: number | string) {
     const numericUserId = await this.resolveUserId(userId);
     return this.prisma.strategy.findMany({
       where: { userId: numericUserId },
-      orderBy: { updatedAt: 'desc' },
       select: {
         id: true,
         name: true,
-        description: true,
-        category: true,
+        symbols: true,
         isActive: true,
-        lastBacktestProfit: true,
-        lastBacktestSharpe: true,
-        lastBacktestWinRate: true,
+        config: true,
         createdAt: true,
-        updatedAt: true,
-      }
+        runs: {
+          take: 5,
+          orderBy: { startedAt: 'desc' },
+          select: {
+            id: true,
+            status: true,
+            totalProfit: true,
+            totalTrades: true,
+          }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
     });
   }
 
   // Save a new strategy
   async saveStrategy(userId: number | string, data: {
     name: string;
-    description?: string;
-    category?: string;
+    symbols: string[];
     config: any;
-    pairs: string[];
-    maxDeals?: number;
-    orderSize?: number;
-    backtestResults?: any;
-    isPublic?: boolean;
   }) {
     const numericUserId = await this.resolveUserId(userId);
-    this.logger.log(`Saving strategy for user ID: ${numericUserId}`);
-    
-    const strategy = await this.prisma.strategy.create({
+    return this.prisma.strategy.create({
       data: {
         userId: numericUserId,
         name: data.name,
-        description: data.description,
-        category: data.category || 'Custom',
-        config: JSON.stringify(data.config),
-        pairs: JSON.stringify(data.pairs),
-        maxDeals: data.maxDeals || 5,
-        orderSize: data.orderSize || 1000,
-        lastBacktestProfit: data.backtestResults?.net_profit,
-        lastBacktestDrawdown: data.backtestResults?.max_drawdown,
-        lastBacktestSharpe: data.backtestResults?.sharpe_ratio,
-        lastBacktestWinRate: data.backtestResults?.win_rate,
-        isPublic: data.isPublic ?? true, // Default to public so it appears in strategies list
+        symbols: data.symbols,
+        config: data.config,
+        isActive: false,
       }
     });
-
-    return strategy;
   }
 
   // Update strategy
-  async updateStrategy(userId: number | string, strategyId: number, data: any) {
+  async updateStrategy(userId: number | string, strategyId: number, updates: any) {
     const numericUserId = await this.resolveUserId(userId);
-    const strategy = await this.prisma.strategy.findFirst({
-      where: { id: strategyId, userId: numericUserId }
-    });
-
-    if (!strategy) {
-      throw new BadRequestException('Strategy not found');
-    }
-
     return this.prisma.strategy.update({
-      where: { id: strategyId },
-      data: {
-        name: data.name,
-        description: data.description,
-        config: data.config ? JSON.stringify(data.config) : undefined,
-        pairs: data.pairs ? JSON.stringify(data.pairs) : undefined,
-        maxDeals: data.maxDeals,
-        orderSize: data.orderSize,
-      }
+      where: { id: strategyId, userId: numericUserId },
+      data: updates
     });
   }
 
-  // Delete strategy (and all associated runs/trades)
+  // Delete strategy
   async deleteStrategy(userId: number | string, strategyId: number) {
     const numericUserId = await this.resolveUserId(userId);
-    const strategy = await this.prisma.strategy.findFirst({
+    
+    // Delete trades first, then runs, then strategy
+    await this.prisma.trade.deleteMany({
+      where: { strategyRun: { strategyId, userId: numericUserId } }
+    });
+    await this.prisma.strategyRun.deleteMany({
+      where: { strategyId, userId: numericUserId }
+    });
+    return this.prisma.strategy.delete({
       where: { id: strategyId, userId: numericUserId }
     });
-
-    if (!strategy) {
-      throw new BadRequestException('Strategy not found');
-    }
-
-    // Stop any running instances
-    for (const [jobId, job] of this.jobs) {
-      if (job.strategyId === strategyId) {
-        this.stopJob(jobId);
-      }
-    }
-
-    // Delete all trades from runs first
-    await this.prisma.trade.deleteMany({
-      where: {
-        strategyRun: {
-          strategyId
-        }
-      }
-    });
-
-    // Delete all runs
-    await this.prisma.strategyRun.deleteMany({
-      where: { strategyId }
-    });
-
-    // Now delete the strategy
-    await this.prisma.strategy.delete({
-      where: { id: strategyId }
-    });
-
-    return { success: true, message: 'Strategy and all associated data deleted' };
   }
 
-  // Start a strategy run
+  // Start live trading
   async startStrategy(
     userId: number | string,
-    strategyId: number,
-    exchangeInstance: Exchange,
-    maxBudget: number, // Max amount user is willing to lose
-    orderSizeOverride?: number // Override order size from strategy
+    strategyId: number | string,
+    exchange: Exchange,
+    exchangeName: string,
+    symbols: string[],
+    config: any,
+    orderSize: number = 10,
+    maxBudget: number = 100
   ) {
     const numericUserId = await this.resolveUserId(userId);
-    const strategy = await this.prisma.strategy.findFirst({
-      where: { id: strategyId, userId: numericUserId }
-    });
+    let dbStrategyId: number;
 
-    if (!strategy) {
-      throw new BadRequestException('Strategy not found');
-    }
-
-    // Check if already running
-    for (const job of this.jobs.values()) {
-      if (job.strategyId === strategyId && job.status === 'running') {
-        throw new BadRequestException('Strategy is already running');
+    // Create or find strategy in DB
+    if (typeof strategyId === 'string' && strategyId.includes('-')) {
+      // Preset strategy - create a DB entry
+      const existing = await this.prisma.strategy.findFirst({
+        where: { userId: numericUserId, name: strategyId }
+      });
+      
+      if (existing) {
+        dbStrategyId = existing.id;
+      } else {
+        const created = await this.prisma.strategy.create({
+          data: {
+            userId: numericUserId,
+            name: strategyId,
+            symbols,
+            config,
+            isActive: true
+          }
+        });
+        dbStrategyId = created.id;
       }
+    } else {
+      dbStrategyId = typeof strategyId === 'number' ? strategyId : parseInt(strategyId);
     }
 
-    const config = JSON.parse(strategy.config);
-    const pairs = JSON.parse(strategy.pairs);
-    const orderSize = orderSizeOverride || strategy.orderSize || 10; // Default to $10
-
-    // Create strategy run record
+    // Create strategy run
     const run = await this.prisma.strategyRun.create({
       data: {
+        strategyId: dbStrategyId,
         userId: numericUserId,
-        strategyId,
-        config: strategy.config,
-        pairs: strategy.pairs,
-        exchange: 'binance',
-        initialBalance: maxBudget,
-        currentBalance: maxBudget,
-        status: 'running'
+        status: 'running',
+        totalTrades: 0,
+        winningTrades: 0,
+        totalProfit: 0,
+        config
       }
     });
 
-    this.logger.log(`Starting strategy ${strategyId}: orderSize=$${orderSize}, maxBudget=$${maxBudget}`);
+    // Mark strategy as active
+    await this.prisma.strategy.update({
+      where: { id: dbStrategyId },
+      data: { isActive: true }
+    });
 
     // Create job
     const jobId = `run_${run.id}`;
     const job: ActiveJob = {
       id: jobId,
       runId: run.id,
-      strategyId,
+      strategyId: dbStrategyId,
       userId: numericUserId,
-      exchange: 'binance',
-      exchangeInstance: exchangeInstance,
-      symbols: pairs,
+      exchange: exchangeName,
+      exchangeInstance: exchange,
+      symbols,
       config,
-      orderSize, // Actual $ amount per trade
-      maxBudget, // Max loss before closing all
+      orderSize: Math.max(orderSize, 10),
+      maxBudget,
+      timer: setInterval(() => this.executeTradingTick(job, exchange), 60000),
       status: 'running',
-      timer: null as any,
-      stats: {
-        trades: 0,
-        wins: 0,
-        profit: 0,
-        unrealizedPnL: 0,
-        lastCheck: new Date()
-      }
+      stats: { trades: 0, wins: 0, profit: 0, unrealizedPnL: 0, lastCheck: new Date() }
     };
-
-    // Start the trading loop - shorter interval for test strategies
-    const isTestStrategy = strategy.name.toLowerCase().includes('test');
-    const intervalMs = config.intervalMs || (isTestStrategy ? 30000 : 60000); // 30s for test, 60s default
-    
-    this.logger.log(`[${jobId}] Trading interval: ${intervalMs/1000}s, Test mode: ${isTestStrategy}`);
-    
-    job.timer = setInterval(async () => {
-      await this.executeTradingTick(job, exchangeInstance);
-    }, intervalMs);
-
-    // Execute first tick immediately
-    this.logger.log(`[${jobId}] Executing first tick...`);
-    this.executeTradingTick(job, exchangeInstance);
 
     this.jobs.set(jobId, job);
+    this.logger.log(`Started strategy ${dbStrategyId} (run ${run.id})`);
     
-    // Update strategy as active (gracefully handle DB errors)
-    try {
-      await this.prisma.strategy.update({
-        where: { id: strategyId },
-        data: { isActive: true }
-      });
-    } catch (dbError) {
-      this.logger.warn(`Could not update strategy active status: ${dbError.message}`);
-      // Continue anyway - the job is already running
-    }
+    // Execute first tick immediately
+    setTimeout(() => this.executeTradingTick(job, exchange), 1000);
 
-    this.logger.log(`Started strategy run ${run.id} for strategy ${strategyId}`);
-
-    return {
-      success: true,
-      runId: run.id,
-      jobId,
-      message: `Strategy started on ${pairs.length} pairs`
-    };
+    return { runId: run.id, strategyId: dbStrategyId, status: 'running' };
   }
 
-  // Execute one trading tick
+  // Execute trading tick - reads from parquet files
   private async executeTradingTick(job: ActiveJob, exchange: Exchange) {
     try {
-      // First, check if we've exceeded max budget (unrealized loss)
-      let openTrades: any[] = [];
-      try {
-        openTrades = await this.prisma.trade.findMany({
-          where: {
-            strategyRunId: job.runId,
-            side: 'buy',
-            status: 'filled',
-            exitPrice: null
-          }
-        });
-      } catch (dbError) {
-        this.logger.warn(`[${job.id}] DB error fetching open trades, skipping tick: ${dbError.message}`);
-        return; // Skip this tick, try again next time
-      }
-      
-      // Calculate unrealized P&L across all open positions
-      let unrealizedPnL = 0;
-      for (const trade of openTrades) {
-        try {
-          const ticker = await exchange.fetchTicker(trade.symbol);
-          const currentPrice = ticker.last || ticker.close || trade.price;
-          const pnl = (currentPrice - trade.entryPrice!) * trade.quantity;
-          unrealizedPnL += pnl;
-        } catch {
-          // Use entry price if can't fetch current
-        }
-      }
-      
-      job.stats.unrealizedPnL = unrealizedPnL;
-      
-      // Check if total loss (realized + unrealized) exceeds max budget
-      const totalLoss = Math.abs(Math.min(0, job.stats.profit + unrealizedPnL));
-      if (totalLoss >= job.maxBudget) {
-        this.logger.warn(`[${job.id}] MAX BUDGET EXCEEDED! Loss: $${totalLoss.toFixed(2)} >= Budget: $${job.maxBudget}`);
-        this.logger.warn(`[${job.id}] EMERGENCY: Closing all ${openTrades.length} positions`);
-        
-        // Close all positions immediately
-        for (const trade of openTrades) {
-          try {
-            const preciseQty = String(exchange.amountToPrecision(trade.symbol, trade.quantity) || trade.quantity);
-            const order: any = await (exchange as any).createOrder(trade.symbol, 'market', 'sell', preciseQty);
-            const exitPrice = order.average || order.price || trade.price;
-            
-            await this.prisma.trade.update({
-              where: { id: trade.id },
-              data: {
-                exitPrice,
-                profitLoss: (exitPrice - trade.entryPrice!) * trade.quantity,
-                profitPercent: ((exitPrice - trade.entryPrice!) / trade.entryPrice!) * 100,
-                comment: 'EMERGENCY CLOSE: Max budget exceeded'
-              }
-            });
-            
-            this.logger.log(`[${job.id}] Emergency closed ${trade.symbol}`);
-          } catch (e: any) {
-            this.logger.error(`[${job.id}] Failed to emergency close ${trade.symbol}: ${e.message}`);
-          }
-        }
-        
-        // Stop the strategy
-        await this.stopStrategy(job.userId, job.runId);
-        return;
-      }
-      
       const config = job.config;
       const entryConditions = config.entry_conditions || config.bullish_entry_conditions || [];
       const exitConditions = config.exit_conditions || config.bullish_exit_conditions || [];
 
       for (const symbol of job.symbols) {
         try {
-          // Check for open position first
+          // Read latest data from parquet
+          const data = await this.readLatestFromParquet(symbol);
+          if (!data) {
+            this.logger.warn(`[${job.id}] No data for ${symbol}`);
+            continue;
+          }
+
+          const currentPrice = data.close;
+          this.logger.log(`[${job.id}] ${symbol} Price: $${currentPrice}, RSI_14: ${data.RSI_14?.toFixed(2)}`);
+
+          // Check for open position
           const openTrade = await this.prisma.trade.findFirst({
             where: {
               strategyRunId: job.runId,
@@ -726,180 +393,153 @@ export class StrategiesService {
             }
           });
 
-          // Use Python signal generator for exact backtest match
-          this.logger.log(`[${job.id}] Getting Python signal for ${symbol}...`);
-          
-          const signalConfig = {
-            exchange: job.exchange,
-            symbol,
-            entry_conditions: entryConditions,
-            exit_conditions: exitConditions,
-            has_position: !!openTrade,
-            position_entry_time: openTrade?.executedAt?.toISOString() || openTrade?.createdAt?.toISOString(),
-          };
-          
-          const pythonSignal = await this.getPythonSignal(signalConfig);
-          this.logger.log(`[${job.id}] Python signal: ${pythonSignal.signal} (${pythonSignal.reason})`);
-          
-          // Get current price for order execution
-          const ticker = await exchange.fetchTicker(symbol);
-          const currentPrice = ticker.last || ticker.close || 0;
+          if (!openTrade) {
+            // Check entry conditions
+            const shouldEnter = this.checkAllConditions(data, entryConditions);
+            
+            if (shouldEnter) {
+              await this.executeBuy(job, exchange, symbol, currentPrice);
+            }
+          } else {
+            // Check exit conditions
+            let shouldExit = false;
+            
+            // Check TIME_ELAPSED first
+            const timeCondition = exitConditions.find((c: any) => c.indicator === 'TIME_ELAPSED');
+            if (timeCondition) {
+              const minutesRequired = timeCondition.subfields?.minutes || 5;
+              const entryTime = openTrade.executedAt || openTrade.createdAt;
+              const minutesSinceEntry = (Date.now() - new Date(entryTime).getTime()) / 60000;
+              shouldExit = minutesSinceEntry >= minutesRequired;
+            } else {
+              shouldExit = this.checkAllConditions(data, exitConditions);
+            }
 
-          if (!openTrade && pythonSignal.signal === 'BUY') {
-            // Entry signal from Python - Execute buy
-              // Binance minimum notional is ~$5-10, enforce $10 minimum
-              const effectiveOrderSize = Math.max(job.orderSize, 10);
-              if (job.orderSize < 10) {
-                this.logger.warn(`[${job.id}] Order size $${job.orderSize} below Binance minimum, using $${effectiveOrderSize}`);
-              }
-              
-              const quantity = effectiveOrderSize / currentPrice;
-              const preciseQty = String(exchange.amountToPrecision(symbol, quantity) || quantity);
-              
-              this.logger.log(`[${job.id}] Order size: $${job.orderSize}, Qty: ${preciseQty} ${symbol}`);
-              
-              let orderId: string | undefined;
-              let actualPrice = currentPrice;
-              let actualQty = Number(preciseQty);
-              
-              try {
-                // Place REAL order on exchange
-                this.logger.log(`[${job.id}] Placing BUY order: ${preciseQty} ${symbol}`);
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
-                const order: any = await (exchange as any).createOrder(symbol, 'market', 'buy', preciseQty);
-                orderId = order.id;
-                actualPrice = order.average || order.price || currentPrice;
-                actualQty = order.filled || Number(preciseQty);
-                this.logger.log(`[${job.id}] Order filled: ${orderId} @ ${actualPrice}`);
-              } catch (orderErr: any) {
-                this.logger.error(`[${job.id}] Order failed: ${orderErr.message}`);
-                // Still record the attempted trade
-              }
-              
-              const trade = await this.prisma.trade.create({
-                data: {
-                  userId: job.userId,
-                  strategyRunId: job.runId,
-                  symbol,
-                  side: 'buy',
-                  type: 'market',
-                  quantity: actualQty,
-                  price: actualPrice,
-                  amount: actualQty * actualPrice,
-                  entryPrice: actualPrice,
-                  status: orderId ? 'filled' : 'failed',
-                  orderId,
-                  executedAt: new Date(),
-                  comment: orderId ? 'Entry signal - order filled' : 'Entry signal - order failed'
-                }
-              });
-
-              job.stats.trades++;
-              this.logger.log(`[${job.id}] BUY ${symbol} @ ${actualPrice} (Order: ${orderId || 'FAILED'})`);
-              
-              // Update run stats after BUY too
-              await this.prisma.strategyRun.update({
-                where: { id: job.runId },
-                data: {
-                  totalTrades: job.stats.trades,
-                  winningTrades: job.stats.wins,
-                  totalProfit: job.stats.profit
-                }
-              });
-          } else if (openTrade && pythonSignal.signal === 'SELL') {
-            // Exit signal from Python
-              // Execute sell - ACTUALLY PLACE ORDER ON EXCHANGE
-              let orderId: string | undefined;
-              let actualPrice = currentPrice;
-              
-              try {
-                // Place REAL sell order on exchange
-                const preciseQty = String(exchange.amountToPrecision(symbol, openTrade.quantity) || openTrade.quantity);
-                this.logger.log(`[${job.id}] Placing SELL order: ${preciseQty} ${symbol}`);
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
-                const order: any = await (exchange as any).createOrder(symbol, 'market', 'sell', preciseQty);
-                orderId = order.id;
-                actualPrice = order.average || order.price || currentPrice;
-                this.logger.log(`[${job.id}] Sell order filled: ${orderId} @ ${actualPrice}`);
-              } catch (orderErr: any) {
-                this.logger.error(`[${job.id}] Sell order failed: ${orderErr.message}`);
-              }
-              
-              const profitLoss = (actualPrice - openTrade.entryPrice!) * openTrade.quantity;
-              const profitPercent = ((actualPrice - openTrade.entryPrice!) / openTrade.entryPrice!) * 100;
-
-              // Update the BUY trade with exit info
-              await this.prisma.trade.update({
-                where: { id: openTrade.id },
-                data: {
-                  exitPrice: actualPrice,
-                  profitLoss,
-                  profitPercent,
-                  orderId: orderId ? `${openTrade.orderId || ''} / ${orderId}` : openTrade.orderId,
-                  comment: orderId ? 'Exit signal - order filled' : 'Exit signal - order failed'
-                }
-              });
-              
-              // Also create a separate SELL trade record for the trades list
-              await this.prisma.trade.create({
-                data: {
-                  userId: job.userId,
-                  strategyRunId: job.runId,
-                  symbol,
-                  side: 'sell',
-                  type: 'market',
-                  quantity: openTrade.quantity,
-                  price: actualPrice,
-                  amount: openTrade.quantity * actualPrice,
-                  entryPrice: openTrade.entryPrice,
-                  exitPrice: actualPrice,
-                  profitLoss,
-                  profitPercent,
-                  status: orderId ? 'filled' : 'failed',
-                  orderId,
-                  executedAt: new Date(),
-                  comment: `Sold position (Entry: $${openTrade.entryPrice?.toFixed(2)}, P/L: $${profitLoss.toFixed(2)})`
-                }
-              });
-
-              job.stats.trades++;
-              job.stats.profit += profitLoss;
-              if (profitLoss > 0) job.stats.wins++;
-
-              this.logger.log(`[${job.id}] SELL ${symbol} @ ${actualPrice} (P/L: ${profitLoss.toFixed(2)}, Order: ${orderId || 'FAILED'})`);
-
-              // Update run stats
-              await this.prisma.strategyRun.update({
-                where: { id: job.runId },
-                data: {
-                  totalTrades: job.stats.trades,
-                  winningTrades: job.stats.wins,
-                  totalProfit: job.stats.profit
-                }
-              });
+            if (shouldExit) {
+              await this.executeSell(job, exchange, openTrade, currentPrice);
             }
           }
-        } catch (err) {
+        } catch (err: any) {
           this.logger.error(`[${job.id}] Error processing ${symbol}: ${err.message}`);
         }
       }
 
       job.stats.lastCheck = new Date();
-    } catch (err) {
+    } catch (err: any) {
       this.logger.error(`[${job.id}] Tick error: ${err.message}`);
       job.status = 'error';
-      
-      await this.prisma.strategyRun.update({
-        where: { id: job.runId },
-        data: {
-          lastError: err.message,
-          errorCount: { increment: 1 }
-        }
-      });
     }
   }
 
-  // Stop a running job
+  // Execute buy order
+  private async executeBuy(job: ActiveJob, exchange: Exchange, symbol: string, price: number) {
+    const quantity = job.orderSize / price;
+    const preciseQty = String(exchange.amountToPrecision(symbol, quantity) || quantity);
+    
+    let orderId: string | undefined;
+    let actualPrice = price;
+    let actualQty = Number(preciseQty);
+
+    try {
+      this.logger.log(`[${job.id}] BUY ${preciseQty} ${symbol}`);
+      const order: any = await (exchange as any).createOrder(symbol, 'market', 'buy', preciseQty);
+      orderId = order.id;
+      actualPrice = order.average || order.price || price;
+      actualQty = order.filled || actualQty;
+    } catch (err: any) {
+      this.logger.error(`[${job.id}] Buy failed: ${err.message}`);
+    }
+
+    await this.prisma.trade.create({
+      data: {
+        userId: job.userId,
+        strategyRunId: job.runId,
+        symbol,
+        side: 'buy',
+        type: 'market',
+        quantity: actualQty,
+        price: actualPrice,
+        amount: actualQty * actualPrice,
+        entryPrice: actualPrice,
+        status: orderId ? 'filled' : 'failed',
+        orderId,
+        executedAt: new Date(),
+        comment: orderId ? 'Entry signal' : 'Entry failed'
+      }
+    });
+
+    job.stats.trades++;
+    await this.prisma.strategyRun.update({
+      where: { id: job.runId },
+      data: { totalTrades: job.stats.trades }
+    });
+  }
+
+  // Execute sell order
+  private async executeSell(job: ActiveJob, exchange: Exchange, trade: any, price: number) {
+    let orderId: string | undefined;
+    let actualPrice = price;
+
+    try {
+      const preciseQty = String(exchange.amountToPrecision(trade.symbol, trade.quantity) || trade.quantity);
+      this.logger.log(`[${job.id}] SELL ${preciseQty} ${trade.symbol}`);
+      const order: any = await (exchange as any).createOrder(trade.symbol, 'market', 'sell', preciseQty);
+      orderId = order.id;
+      actualPrice = order.average || order.price || price;
+    } catch (err: any) {
+      this.logger.error(`[${job.id}] Sell failed: ${err.message}`);
+    }
+
+    const profitLoss = (actualPrice - trade.entryPrice) * trade.quantity;
+    const profitPercent = ((actualPrice - trade.entryPrice) / trade.entryPrice) * 100;
+
+    await this.prisma.trade.update({
+      where: { id: trade.id },
+      data: {
+        exitPrice: actualPrice,
+        profitLoss,
+        profitPercent,
+        comment: 'Exit signal'
+      }
+    });
+
+    // Create sell trade record
+    await this.prisma.trade.create({
+      data: {
+        userId: job.userId,
+        strategyRunId: job.runId,
+        symbol: trade.symbol,
+        side: 'sell',
+        type: 'market',
+        quantity: trade.quantity,
+        price: actualPrice,
+        amount: trade.quantity * actualPrice,
+        entryPrice: trade.entryPrice,
+        exitPrice: actualPrice,
+        profitLoss,
+        profitPercent,
+        status: orderId ? 'filled' : 'failed',
+        orderId,
+        executedAt: new Date(),
+        comment: `Closed (P/L: $${profitLoss.toFixed(2)})`
+      }
+    });
+
+    job.stats.trades++;
+    job.stats.profit += profitLoss;
+    if (profitLoss > 0) job.stats.wins++;
+
+    await this.prisma.strategyRun.update({
+      where: { id: job.runId },
+      data: {
+        totalTrades: job.stats.trades,
+        winningTrades: job.stats.wins,
+        totalProfit: job.stats.profit
+      }
+    });
+  }
+
+  // Stop job helper
   private stopJob(jobId: string) {
     const job = this.jobs.get(jobId);
     if (job) {
@@ -908,183 +548,104 @@ export class StrategiesService {
     }
   }
 
-  // Stop strategy run - close all open positions first
+  // Stop strategy and close positions
   async stopStrategy(userId: number | string, runId: number) {
     const numericUserId = await this.resolveUserId(userId);
     const jobId = `run_${runId}`;
     const job = this.jobs.get(jobId);
 
-    // First check if the run exists in database
     const run = await this.prisma.strategyRun.findFirst({
       where: { id: runId, userId: numericUserId }
     });
 
     if (!run) {
-      throw new BadRequestException('Strategy run not found in database');
+      throw new BadRequestException('Strategy run not found');
     }
 
-    // Close all open positions before stopping
-    const closedPositions: string[] = [];
-    
-    // Try to close positions if we have an exchange connection (either from job or from exchange service)
+    // Close open positions
     if (job?.exchangeInstance) {
-      try {
-        const openTrades = await this.prisma.trade.findMany({
-          where: {
-            strategyRunId: runId,
-            side: 'buy',
-            status: 'filled',
-            exitPrice: null
-          }
-        });
+      const openTrades = await this.prisma.trade.findMany({
+        where: { strategyRunId: runId, side: 'buy', status: 'filled', exitPrice: null }
+      });
 
-        for (const trade of openTrades) {
-          try {
-            const exchange = job.exchangeInstance;
-            
-            // Get actual balance to account for fees that were deducted
-            const baseAsset = trade.symbol.split('/')[0]; // e.g., "BTC" from "BTC/USDT"
-            let sellQty = trade.quantity;
-            
-            try {
-              const balance = await exchange.fetchBalance();
-              const availableBalance = balance[baseAsset]?.free || 0;
-              
-              // Use the smaller of: recorded quantity or actual available balance
-              if (availableBalance > 0 && availableBalance < trade.quantity) {
-                this.logger.log(`[${jobId}] Adjusting sell qty from ${trade.quantity} to ${availableBalance} (fees deducted)`);
-                sellQty = availableBalance;
-              }
-            } catch (balanceErr: any) {
-              this.logger.warn(`[${jobId}] Could not fetch balance, using recorded qty: ${balanceErr.message}`);
-            }
-            
-            const preciseQty = String(exchange.amountToPrecision(trade.symbol, sellQty) || sellQty);
-            
-            this.logger.log(`[${jobId}] Closing position: SELL ${preciseQty} ${trade.symbol}`);
-            const order: any = await (exchange as any).createOrder(trade.symbol, 'market', 'sell', preciseQty);
-            
-            const exitPrice = order.average || order.price || trade.price;
-            const profitLoss = (exitPrice - trade.entryPrice!) * trade.quantity;
-            const profitPercent = ((exitPrice - trade.entryPrice!) / trade.entryPrice!) * 100;
-            
-            await this.prisma.trade.update({
-              where: { id: trade.id },
-              data: {
-                exitPrice,
-                profitLoss,
-                profitPercent,
-                orderId: `${trade.orderId || ''} / ${order.id}`,
-                comment: 'Position closed on strategy stop'
-              }
-            });
-            
-            closedPositions.push(`${trade.symbol} @ ${exitPrice}`);
-            this.logger.log(`[${jobId}] Closed ${trade.symbol} @ ${exitPrice} (P/L: ${profitLoss.toFixed(2)})`);
-          } catch (err) {
-            this.logger.error(`[${jobId}] Failed to close ${trade.symbol}: ${err.message}`);
-          }
+      for (const trade of openTrades) {
+        try {
+          const exchange = job.exchangeInstance;
+          const preciseQty = String(exchange.amountToPrecision(trade.symbol, trade.quantity));
+          const order: any = await (exchange as any).createOrder(trade.symbol, 'market', 'sell', preciseQty);
+          const exitPrice = order.average || order.price || trade.price;
+          const profitLoss = (exitPrice - trade.entryPrice!) * trade.quantity;
+
+          await this.prisma.trade.update({
+            where: { id: trade.id },
+            data: { exitPrice, profitLoss, comment: 'Closed on stop' }
+          });
+        } catch (err: any) {
+          this.logger.error(`Failed to close ${trade.symbol}: ${err.message}`);
         }
-      } catch (err) {
-        this.logger.error(`[${jobId}] Error closing positions: ${err.message}`);
       }
-    } else {
-      this.logger.warn(`[${jobId}] No exchange instance available - positions not closed automatically`);
     }
 
-    // Stop the in-memory job if it exists
     this.stopJob(jobId);
 
-    // Update database
     await this.prisma.strategyRun.update({
       where: { id: runId },
-      data: {
-        status: 'stopped',
-        stoppedAt: new Date()
-      }
+      data: { status: 'stopped', endedAt: new Date() }
     });
 
-    // Update strategy to inactive (use run.strategyId since job might not exist)
     await this.prisma.strategy.update({
       where: { id: run.strategyId },
       data: { isActive: false }
     });
 
-    return { 
-      success: true, 
-      message: `Strategy stopped. Closed ${closedPositions.length} open position(s).`,
-      closedPositions
-    };
+    return { status: 'stopped', runId };
   }
 
-  // Get running strategies for user
+  // Get running strategies
   async getRunningStrategies(userId: number | string) {
     const numericUserId = await this.resolveUserId(userId);
+    
     const runs = await this.prisma.strategyRun.findMany({
       where: { userId: numericUserId, status: 'running' },
       include: {
-        strategy: {
-          select: { id: true, name: true, description: true, category: true }
-        },
-        trades: {
-          where: { status: 'filled' }, // Only show completed trades
-          orderBy: { createdAt: 'desc' },
-          take: 5, // Reduce from 10 to 5 for faster loading
-          select: { id: true, symbol: true, side: true, price: true, quantity: true, profitLoss: true, createdAt: true }
-        }
-      }
+        strategy: { select: { id: true, name: true, symbols: true } },
+        trades: { take: 5, orderBy: { createdAt: 'desc' } }
+      },
+      orderBy: { startedAt: 'desc' }
     });
 
-    return runs.map(run => {
-      const jobId = `run_${run.id}`;
-      const job = this.jobs.get(jobId);
-      
-      return {
-        ...run,
-        pairs: JSON.parse(run.pairs),
-        isLive: !!job,
-        lastCheck: job?.stats.lastCheck
-      };
-    });
+    return runs.map(run => ({
+      ...run,
+      isLive: this.jobs.has(`run_${run.id}`)
+    }));
   }
 
-  // Get strategy run details with trades
+  // Get run details
   async getRunDetails(userId: number | string, runId: number) {
     const numericUserId = await this.resolveUserId(userId);
+    
     const run = await this.prisma.strategyRun.findFirst({
       where: { id: runId, userId: numericUserId },
       include: {
         strategy: true,
-        trades: {
-          orderBy: { createdAt: 'desc' }
-        }
+        trades: { orderBy: { createdAt: 'desc' } }
       }
     });
 
-    if (!run) {
-      throw new BadRequestException('Run not found');
-    }
+    if (!run) return null;
 
-    const jobId = `run_${run.id}`;
-    const job = this.jobs.get(jobId);
-
-    return {
-      ...run,
-      config: JSON.parse(run.config),
-      pairs: JSON.parse(run.pairs),
-      isLive: !!job,
-      liveStats: job?.stats
-    };
+    const job = this.jobs.get(`run_${runId}`);
+    return { ...run, isLive: !!job, stats: job?.stats };
   }
 
-  // List all jobs (for monitoring)
+  // List all active jobs
   listJobs() {
-    return Array.from(this.jobs.values()).map(job => ({
-      id: job.id,
+    return Array.from(this.jobs.entries()).map(([id, job]) => ({
+      id,
       runId: job.runId,
       strategyId: job.strategyId,
+      userId: job.userId,
       status: job.status,
-      symbols: job.symbols,
       stats: job.stats
     }));
   }
