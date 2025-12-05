@@ -11,7 +11,8 @@
   },
   "scripts": {
     "prepare": "husky install",
-    "build": "nest build",
+    "build": "prisma generate && nest build",
+    "postbuild": "prisma migrate deploy || true",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
