@@ -39,10 +39,11 @@ export class StrategiesController {
     }
   ) {
     const userId = this.getUserId(req);
-    const conn = this.exchange.getConnection(body.exchange || 'binance');
+    const exchangeName = body.exchange || 'binance';
+    const conn = this.exchange.getConnection(exchangeName, userId);
     
     if (!conn?.instance) {
-      return { error: `${body.exchange || 'Exchange'} not connected. Please connect your account first.` };
+      return { error: `${exchangeName} not connected. Please connect your account first on the Connect page.` };
     }
 
     // Create a temp strategy and start it
@@ -54,12 +55,18 @@ export class StrategiesController {
       orderSize: body.orderSize,
     });
 
-    return this.strategies.startStrategy(
+    const result = await this.strategies.startStrategy(
       userId,
       strategy.id,
       conn.instance,
       body.orderSize * 5 // Use 5x order size as initial balance
     );
+
+    return { 
+      ...result, 
+      message: 'Strategy started successfully! Check your Dashboard to monitor.',
+      strategyId: strategy.id 
+    };
   }
 
   // Get user's saved strategies
@@ -109,21 +116,27 @@ export class StrategiesController {
   async startStrategy(
     @Req() req: AuthenticatedRequest,
     @Param('id') id: string,
-    @Body() body: { initialBalance?: number }
+    @Body() body: { initialBalance?: number; exchange?: string }
   ) {
     const userId = this.getUserId(req);
-    const conn = this.exchange.getConnection('binance');
+    const exchangeName = body.exchange || 'binance';
+    const conn = this.exchange.getConnection(exchangeName, userId);
     
     if (!conn?.instance) {
-      return { error: 'Exchange not connected. Please connect your Binance account first.' };
+      return { error: `${exchangeName} not connected. Please connect your exchange account first on the Connect page.` };
     }
 
-    return this.strategies.startStrategy(
+    const result = await this.strategies.startStrategy(
       userId,
       parseInt(id),
       conn.instance,
       body.initialBalance || 5000
     );
+
+    return {
+      ...result,
+      message: 'Strategy started successfully! Check your Dashboard to monitor.',
+    };
   }
 
   // Stop a running strategy
