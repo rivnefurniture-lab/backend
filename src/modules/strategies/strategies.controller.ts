@@ -138,11 +138,12 @@ export class StrategiesController {
       console.log(`Starting strategy: orderSize=$${orderSize}, maxBudget=$${maxBudget}`);
 
       // Create a temp strategy and start it
+      const pairs = [body.symbol];
       const strategy = await this.strategies.saveStrategy(userId, {
         name: `Live: ${body.strategyId}`,
         description: `Started from preset ${body.strategyId}`,
         config,
-        pairs: [body.symbol],
+        pairs,
         orderSize,
       });
 
@@ -150,8 +151,11 @@ export class StrategiesController {
         userId,
         strategy.id,
         conn.instance,
-        maxBudget, // Max loss budget
-        orderSize  // Order size per trade
+        exchangeName,
+        pairs,
+        config,
+        orderSize,
+        maxBudget
       );
 
       return { 
@@ -239,7 +243,7 @@ export class StrategiesController {
   async startStrategy(
     @Req() req: AuthenticatedRequest,
     @Param('id') id: string,
-    @Body() body: { orderSize?: number; maxBudget?: number; exchange?: string }
+    @Body() body: { orderSize?: number; maxBudget?: number; exchange?: string; pairs?: string[] }
   ) {
     const userId = await this.getUserId(req);
     const exchangeName = body.exchange || 'binance';
@@ -249,15 +253,29 @@ export class StrategiesController {
       return { error: `${exchangeName} not connected. Please connect your exchange account first on the Connect page.` };
     }
 
-    const orderSize = body.orderSize || 10;
+    // Load strategy to get config and pairs
+    const strategy = await this.prisma.strategy.findFirst({
+      where: { id: parseInt(id), userId }
+    });
+    
+    if (!strategy) {
+      return { error: 'Strategy not found' };
+    }
+
+    const orderSize = body.orderSize || strategy.orderSize || 10;
     const maxBudget = body.maxBudget || orderSize * 5;
+    const pairs = body.pairs || strategy.pairs.split(',');
+    const config = JSON.parse(strategy.config);
 
     const result = await this.strategies.startStrategy(
       userId,
       parseInt(id),
       conn.instance,
-      maxBudget,
-      orderSize
+      exchangeName,
+      pairs,
+      config,
+      orderSize,
+      maxBudget
     );
 
     return {

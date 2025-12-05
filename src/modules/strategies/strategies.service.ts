@@ -216,7 +216,7 @@ except Exception as e:
       select: {
         id: true,
         name: true,
-        symbols: true,
+        pairs: true,
         isActive: true,
         config: true,
         createdAt: true,
@@ -238,16 +238,25 @@ except Exception as e:
   // Save a new strategy
   async saveStrategy(userId: number | string, data: {
     name: string;
-    symbols: string[];
+    pairs: string[] | string;
     config: any;
+    description?: string;
+    category?: string;
+    orderSize?: number;
   }) {
     const numericUserId = await this.resolveUserId(userId);
+    const pairsStr = Array.isArray(data.pairs) ? data.pairs.join(',') : data.pairs;
+    const configStr = typeof data.config === 'string' ? data.config : JSON.stringify(data.config);
+    
     return this.prisma.strategy.create({
       data: {
         userId: numericUserId,
         name: data.name,
-        symbols: data.symbols,
-        config: data.config,
+        description: data.description,
+        category: data.category,
+        pairs: pairsStr,
+        config: configStr,
+        orderSize: data.orderSize || 100,
         isActive: false,
       }
     });
@@ -284,13 +293,15 @@ except Exception as e:
     strategyId: number | string,
     exchange: Exchange,
     exchangeName: string,
-    symbols: string[],
+    pairs: string[],
     config: any,
     orderSize: number = 10,
     maxBudget: number = 100
   ) {
     const numericUserId = await this.resolveUserId(userId);
     let dbStrategyId: number;
+    const pairsStr = pairs.join(',');
+    const configStr = typeof config === 'string' ? config : JSON.stringify(config);
 
     // Create or find strategy in DB
     if (typeof strategyId === 'string' && strategyId.includes('-')) {
@@ -306,8 +317,9 @@ except Exception as e:
           data: {
             userId: numericUserId,
             name: strategyId,
-            symbols,
-            config,
+            pairs: pairsStr,
+            config: configStr,
+            orderSize,
             isActive: true
           }
         });
@@ -322,11 +334,14 @@ except Exception as e:
       data: {
         strategyId: dbStrategyId,
         userId: numericUserId,
+        exchange: exchangeName,
         status: 'running',
+        pairs: pairsStr,
+        initialBalance: orderSize * pairs.length,
         totalTrades: 0,
         winningTrades: 0,
         totalProfit: 0,
-        config
+        config: configStr
       }
     });
 
@@ -345,7 +360,7 @@ except Exception as e:
       userId: numericUserId,
       exchange: exchangeName,
       exchangeInstance: exchange,
-      symbols,
+      symbols: pairs,
       config,
       orderSize: Math.max(orderSize, 10),
       maxBudget,
@@ -590,7 +605,7 @@ except Exception as e:
 
     await this.prisma.strategyRun.update({
       where: { id: runId },
-      data: { status: 'stopped', endedAt: new Date() }
+      data: { status: 'stopped', stoppedAt: new Date() }
     });
 
     await this.prisma.strategy.update({
@@ -608,7 +623,7 @@ except Exception as e:
     const runs = await this.prisma.strategyRun.findMany({
       where: { userId: numericUserId, status: 'running' },
       include: {
-        strategy: { select: { id: true, name: true, symbols: true } },
+        strategy: { select: { id: true, name: true, pairs: true } },
         trades: { take: 5, orderBy: { createdAt: 'desc' } }
       },
       orderBy: { startedAt: 'desc' }
