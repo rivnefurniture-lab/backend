@@ -25,8 +25,10 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/static ./static
+COPY --from=builder /app/scripts ./scripts
 
-RUN mkdir -p static scripts && chown -R nestjs:nodejs /app
+RUN chown -R nestjs:nodejs /app
 
 USER nestjs
 
