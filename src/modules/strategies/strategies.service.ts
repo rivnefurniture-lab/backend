@@ -89,64 +89,8 @@ export class StrategiesService {
     }
   }
 
-  // Read latest data from parquet files using Python
-  private async readLatestFromParquet(symbol: string): Promise<ParquetRow | null> {
-    return new Promise((resolve) => {
-      const symbolClean = symbol.replace('/', '').replace('USDT', '');
-      const parquetPath = path.join(this.staticDir, `${symbolClean}_1m.parquet`);
-      
-      if (!fs.existsSync(parquetPath)) {
-        this.logger.warn(`Parquet file not found: ${parquetPath}`);
-        resolve(null);
-        return;
-      }
-
-      // Use Python to read last row from parquet
-      const script = `
-import pandas as pd
-import json
-import sys
-
-try:
-    df = pd.read_parquet('${parquetPath}')
-    if len(df) > 0:
-        last_row = df.iloc[-1].to_dict()
-        # Convert timestamp to string if needed
-        for k, v in last_row.items():
-            if hasattr(v, 'isoformat'):
-                last_row[k] = v.isoformat()
-            elif pd.isna(v):
-                last_row[k] = None
-        print(json.dumps(last_row))
-    else:
-        print('null')
-except Exception as e:
-    print(f'{{"error": "{str(e)}"}}', file=sys.stderr)
-    print('null')
-`;
-
-      const python = spawn('python3', ['-c', script]);
-      let stdout = '';
-      
-      python.stdout.on('data', (data) => { stdout += data.toString(); });
-      python.stderr.on('data', (data) => { this.logger.debug(`Parquet read: ${data}`); });
-      
-      python.on('close', () => {
-        try {
-          const result = JSON.parse(stdout.trim());
-          resolve(result);
-        } catch {
-          resolve(null);
-        }
-      });
-      
-      python.on('error', () => resolve(null));
-      setTimeout(() => { python.kill(); resolve(null); }, 10000);
-    });
-  }
-
-  // Check a single condition against parquet data
-  private checkCondition(data: ParquetRow, condition: any): boolean {
+  // Check a single condition against data from Hetzner
+  private checkCondition(data: Record<string, any>, condition: any): boolean {
     const { indicator, subfields } = condition;
     const conditionType = subfields?.Condition || 'Greater Than';
     const targetValue = subfields?.['Signal Value'] || 0;
@@ -199,7 +143,7 @@ except Exception as e:
   }
 
   // Check all conditions for entry/exit
-  private checkAllConditions(data: ParquetRow, conditions: any[]): boolean {
+  private checkAllConditions(data: Record<string, any>, conditions: any[]): boolean {
     if (!conditions || conditions.length === 0) return false;
     
     for (const cond of conditions) {

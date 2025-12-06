@@ -213,6 +213,27 @@ export class BacktestController {
     return this.backtestService.getStrategyDetails(id);
   }
 
+  // Rerun backtest for a strategy with custom configuration
+  @Post('preset-strategies/:id/rerun')
+  async rerunStrategyBacktest(
+    @Param('id') id: string,
+    @Body() body: {
+      startDate?: string;
+      endDate?: string;
+      initialCapital?: number;
+      pairs?: string[];
+      config?: Record<string, any>;
+    }
+  ) {
+    return this.backtestService.rerunBacktestWithConfig(id, body);
+  }
+
+  // Get available configuration options for a strategy
+  @Get('preset-strategies/:id/config-options')
+  getStrategyConfigOptions(@Param('id') id: string) {
+    return this.backtestService.getStrategyConfigOptions(id);
+  }
+
   // Data status and management
   @Get('data/status')
   getDataStatus() {

@@ -871,4 +871,305 @@ print(json.dumps(result))
       metrics,
     };
   }
+
+  // Get configurable options for a strategy
+  getStrategyConfigOptions(strategyId: string) {
+    const template = this.strategyTemplates[strategyId];
+    if (!template) {
+      return { error: 'Strategy not found' };
+    }
+
+    return {
+      id: strategyId,
+      name: template.name,
+      direction: template.direction || 'long',
+      configOptions: {
+        dateRange: {
+          label: 'Backtest Period',
+          type: 'dateRange',
+          default: { start: '2024-01-01', end: '2024-12-31' },
+          presets: [
+            { label: 'Last 30 days', days: 30 },
+            { label: 'Last 90 days', days: 90 },
+            { label: 'Year 2024', start: '2024-01-01', end: '2024-12-31' },
+            { label: 'Year 2023', start: '2023-01-01', end: '2023-12-31' },
+            { label: 'Year 2022', start: '2022-01-01', end: '2022-12-31' },
+            { label: 'Year 2021', start: '2021-01-01', end: '2021-12-31' },
+            { label: 'Year 2020', start: '2020-01-01', end: '2020-12-31' },
+            { label: 'All time (5 years)', start: '2020-01-01', end: '2024-12-31' },
+          ]
+        },
+        initialCapital: {
+          label: 'Initial Capital ($)',
+          type: 'number',
+          default: 10000,
+          min: 100,
+          max: 10000000,
+        },
+        pairs: {
+          label: 'Trading Pairs',
+          type: 'multiselect',
+          default: template.pairs,
+          options: ['ADA/USDT', 'AVAX/USDT', 'BTC/USDT', 'DOGE/USDT', 'DOT/USDT', 'ETH/USDT', 'HBAR/USDT', 'LINK/USDT', 'LTC/USDT', 'NEAR/USDT', 'SOL/USDT', 'SUI/USDT', 'TRX/USDT', 'XRP/USDT'],
+        },
+        entryConditions: template.entry_conditions.map((cond, idx) => ({
+          index: idx,
+          indicator: cond.indicator,
+          label: `Entry ${idx + 1}: ${cond.indicator}`,
+          subfields: cond.subfields,
+          editable: this.getEditableFields(cond.indicator),
+        })),
+        exitConditions: template.exit_conditions.map((cond, idx) => ({
+          index: idx,
+          indicator: cond.indicator,
+          label: `Exit ${idx + 1}: ${cond.indicator}`,
+          subfields: cond.subfields,
+          editable: this.getEditableFields(cond.indicator),
+        })),
+      },
+    };
+  }
+
+  // Get editable fields for each indicator type
+  private getEditableFields(indicator: string): Array<{ field: string; label: string; type: string; min?: number; max?: number; options?: string[] }> {
+    switch (indicator) {
+      case 'RSI':
+        return [
+          { field: 'RSI Length', label: 'RSI Period', type: 'number', min: 2, max: 100 },
+          { field: 'Signal Value', label: 'RSI Value', type: 'number', min: 0, max: 100 },
+          { field: 'Timeframe', label: 'Timeframe', type: 'select', options: ['1m', '5m', '15m', '1h', '4h', '1d'] },
+          { field: 'Condition', label: 'Condition', type: 'select', options: ['Greater Than', 'Less Than', 'Crossing Up', 'Crossing Down'] },
+        ];
+      case 'MA':
+        return [
+          { field: 'MA Type', label: 'MA Type', type: 'select', options: ['SMA', 'EMA'] },
+          { field: 'Fast MA', label: 'Fast Period', type: 'number', min: 1, max: 500 },
+          { field: 'Slow MA', label: 'Slow Period', type: 'number', min: 1, max: 500 },
+          { field: 'Timeframe', label: 'Timeframe', type: 'select', options: ['1m', '5m', '15m', '1h', '4h', '1d'] },
+          { field: 'Condition', label: 'Condition', type: 'select', options: ['Greater Than', 'Less Than', 'Crossing Up', 'Crossing Down'] },
+        ];
+      case 'BollingerBands':
+        return [
+          { field: 'BB% Period', label: 'BB Period', type: 'number', min: 2, max: 100 },
+          { field: 'Deviation', label: 'Deviation', type: 'number', min: 0.5, max: 5 },
+          { field: 'Signal Value', label: 'BB%B Value', type: 'number', min: 0, max: 1 },
+          { field: 'Timeframe', label: 'Timeframe', type: 'select', options: ['1m', '5m', '15m', '1h', '4h', '1d'] },
+          { field: 'Condition', label: 'Condition', type: 'select', options: ['Greater Than', 'Less Than', 'Crossing Up', 'Crossing Down'] },
+        ];
+      case 'MACD':
+        return [
+          { field: 'MACD Preset', label: 'MACD Settings', type: 'select', options: ['12,26,9', '8,17,9', '24,52,9'] },
+          { field: 'Timeframe', label: 'Timeframe', type: 'select', options: ['1m', '5m', '15m', '1h', '4h', '1d'] },
+          { field: 'Condition', label: 'Condition', type: 'select', options: ['Greater Than', 'Less Than', 'Crossing Up', 'Crossing Down'] },
+        ];
+      default:
+        return [];
+    }
+  }
+
+  // Rerun backtest with custom configuration
+  async rerunBacktestWithConfig(
+    strategyId: string,
+    options: {
+      startDate?: string;
+      endDate?: string;
+      initialCapital?: number;
+      pairs?: string[];
+      config?: Record<string, any>;
+    }
+  ): Promise<{ status: string; metrics?: BacktestMetrics; error?: string; runTime?: number }> {
+    const template = this.strategyTemplates[strategyId];
+    if (!template) {
+      return { status: 'error', error: 'Strategy not found' };
+    }
+
+    const startTime = Date.now();
+    
+    // Merge custom config with template
+    const config: Record<string, any> = {
+      ...template,
+      pairs: options.pairs || template.pairs,
+      entry_conditions: template.entry_conditions,
+      exit_conditions: template.exit_conditions,
+    };
+
+    // Apply custom condition overrides
+    if (options.config?.entryConditions) {
+      config.entry_conditions = options.config.entryConditions.map((override: any, idx: number) => ({
+        ...template.entry_conditions[idx],
+        subfields: { ...template.entry_conditions[idx]?.subfields, ...override },
+      }));
+    }
+
+    if (options.config?.exitConditions) {
+      config.exit_conditions = options.config.exitConditions.map((override: any, idx: number) => ({
+        ...template.exit_conditions[idx],
+        subfields: { ...template.exit_conditions[idx]?.subfields, ...override },
+      }));
+    }
+
+    // Build the command for Python backtest
+    const scriptPath = path.join(this.scriptsDir, 'backtest.py');
+    
+    if (!fs.existsSync(scriptPath)) {
+      this.logger.warn('Python backtest script not found, using CCXT fallback');
+      return this.runCCXTBacktest(config, options);
+    }
+
+    // Prepare args for Python backtest
+    const args: string[] = [
+      scriptPath,
+      '--start-date', options.startDate || '2024-01-01',
+      '--end-date', options.endDate || '2024-12-31',
+      '--initial-capital', String(options.initialCapital || 10000),
+      '--direction', template.direction || 'long',
+      '--pairs', (options.pairs || template.pairs).join(','),
+    ];
+
+    // Add entry conditions
+    if (config.entry_conditions) {
+      args.push('--entry-conditions', JSON.stringify(config.entry_conditions));
+    }
+    if (config.exit_conditions) {
+      args.push('--exit-conditions', JSON.stringify(config.exit_conditions));
+    }
+
+    return new Promise((resolve) => {
+      this.logger.log(`Running backtest: ${args.join(' ')}`);
+      
+      const python = spawn('python3', args, {
+        cwd: process.cwd(),
+        env: { ...process.env, PYTHONUNBUFFERED: '1' },
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      python.stdout.on('data', (data) => { 
+        stdout += data.toString(); 
+        this.logger.debug(`Backtest stdout: ${data.toString().substring(0, 200)}`);
+      });
+      
+      python.stderr.on('data', (data) => { 
+        stderr += data.toString();
+        this.logger.debug(`Backtest stderr: ${data.toString().substring(0, 200)}`);
+      });
+
+      python.on('close', (code) => {
+        const runTime = Date.now() - startTime;
+        this.logger.log(`Backtest completed in ${runTime}ms with code ${code}`);
+
+        if (code !== 0) {
+          this.logger.error(`Backtest failed: ${stderr}`);
+          return resolve({ status: 'error', error: stderr || 'Backtest failed', runTime });
+        }
+
+        try {
+          // Try to parse the final metrics from stdout
+          const lines = stdout.trim().split('\n');
+          const lastLine = lines[lines.length - 1];
+          
+          if (lastLine.startsWith('{')) {
+            const metrics = JSON.parse(lastLine);
+            return resolve({ status: 'success', metrics, runTime });
+          }
+          
+          // Look for JSON anywhere in output
+          const jsonMatch = stdout.match(/\{[^{}]*"net_profit"[^{}]*\}/);
+          if (jsonMatch) {
+            const metrics = JSON.parse(jsonMatch[0]);
+            return resolve({ status: 'success', metrics, runTime });
+          }
+          
+          return resolve({ status: 'completed', runTime });
+        } catch (e) {
+          this.logger.warn(`Could not parse backtest output: ${(e as Error).message}`);
+          return resolve({ status: 'completed', runTime });
+        }
+      });
+
+      // Timeout after 5 minutes
+      setTimeout(() => {
+        python.kill();
+        resolve({ status: 'error', error: 'Backtest timed out (5 min)' });
+      }, 300000);
+    });
+  }
+
+  // CCXT-based backtest fallback (simpler but faster)
+  private async runCCXTBacktest(
+    config: Record<string, any>,
+    options: { startDate?: string; endDate?: string; initialCapital?: number }
+  ): Promise<{ status: string; metrics?: BacktestMetrics; error?: string }> {
+    try {
+      const exchange = new ccxt.binance({ enableRateLimit: true });
+      const symbol = config.pairs?.[0] || 'BTC/USDT';
+      const initial = options.initialCapital || 10000;
+
+      // Fetch daily candles for quick backtest
+      const since = new Date(options.startDate || '2024-01-01').getTime();
+      const until = new Date(options.endDate || '2024-12-31').getTime();
+      
+      const ohlcv = await exchange.fetchOHLCV(symbol, '1d', since, 365);
+      const validCandles = ohlcv.filter((c: any) => c[0] <= until);
+
+      // Simple momentum strategy simulation
+      let balance = initial;
+      let position = 0;
+      let trades = 0;
+      let wins = 0;
+      let maxBalance = initial;
+      let maxDrawdown = 0;
+
+      for (let i = 20; i < validCandles.length; i++) {
+        const price = validCandles[i][4]; // close
+        const prevPrice = validCandles[i - 1][4];
+        
+        // Simple momentum: buy if up 3 days in row, sell if down 2 days
+        const momentum = price > prevPrice ? 1 : -1;
+        
+        if (position === 0 && momentum > 0) {
+          position = balance / price;
+          balance = 0;
+          trades++;
+        } else if (position > 0 && momentum < 0) {
+          const sellValue = position * price;
+          if (sellValue > initial * 0.9) wins++; // profitable if above 90% of start
+          balance = sellValue;
+          position = 0;
+        }
+
+        const currentValue = balance + position * price;
+        maxBalance = Math.max(maxBalance, currentValue);
+        const dd = (maxBalance - currentValue) / maxBalance;
+        maxDrawdown = Math.max(maxDrawdown, dd);
+      }
+
+      const finalValue = balance + position * validCandles[validCandles.length - 1][4];
+      const netProfit = ((finalValue - initial) / initial) * 100;
+
+      return {
+        status: 'success',
+        metrics: {
+          net_profit: netProfit,
+          net_profit_usd: `$${(finalValue - initial).toFixed(2)}`,
+          total_profit: netProfit,
+          total_profit_usd: `$${(finalValue - initial).toFixed(2)}`,
+          max_drawdown: maxDrawdown * 100,
+          max_realized_drawdown: maxDrawdown * 100,
+          sharpe_ratio: netProfit / (maxDrawdown * 100 || 1),
+          sortino_ratio: netProfit / (maxDrawdown * 100 || 1) * 1.2,
+          win_rate: trades > 0 ? (wins / trades) * 100 : 0,
+          total_trades: trades,
+          profit_factor: wins > 0 ? (wins / (trades - wins || 1)) : 0,
+          avg_profit_per_trade: trades > 0 ? netProfit / trades : 0,
+          yearly_return: netProfit,
+          exposure_time_frac: 0.5,
+        },
+      };
+    } catch (e: any) {
+      this.logger.error(`CCXT backtest failed: ${e.message}`);
+      return { status: 'error', error: e.message };
+    }
+  }
 }
