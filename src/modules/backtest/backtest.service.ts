@@ -800,12 +800,10 @@ print(json.dumps(result))
         }
       }
 
-      // Return most recent trades first
-      const sortedTrades = allTrades.reverse();
-      
+      // Return trades in chronological order (oldest first)
       return {
-        trades: sortedTrades.slice(0, limit),
-        total: sortedTrades.length,
+        trades: allTrades.slice(0, limit),
+        total: allTrades.length,
       };
     } catch (error) {
       this.logger.error(`Error reading trades CSV: ${(error as Error).message}`);
@@ -967,7 +965,7 @@ print(json.dumps(result))
     }
   }
 
-  // Rerun backtest with custom configuration
+  // Rerun backtest with custom configuration - uses Hetzner server for real backtest
   async rerunBacktestWithConfig(
     strategyId: string,
     options: {
@@ -985,33 +983,59 @@ print(json.dumps(result))
 
     const startTime = Date.now();
     
-    // Merge custom config with template
-    const config: Record<string, any> = {
-      ...template,
-      pairs: options.pairs || template.pairs,
-      entry_conditions: template.entry_conditions,
-      exit_conditions: template.exit_conditions,
-    };
-
-    // Apply custom condition overrides
-    if (options.config?.entryConditions) {
-      config.entry_conditions = options.config.entryConditions.map((override: any, idx: number) => ({
-        ...template.entry_conditions[idx],
-        subfields: { ...template.entry_conditions[idx]?.subfields, ...override },
-      }));
+    // Try Hetzner server first (runs actual Python backtest)
+    const hetznerUrl = process.env.HETZNER_DATA_URL || 'http://46.224.99.27:5000';
+    const hetznerKey = process.env.HETZNER_API_KEY || '';
+    
+    try {
+      this.logger.log(`Running backtest on Hetzner for ${strategyId}`);
+      
+      const response = await fetch(`${hetznerUrl}/backtest/preset/${strategyId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': hetznerKey,
+        },
+        body: JSON.stringify({
+          start_date: options.startDate || '2024-01-01',
+          end_date: options.endDate || '2024-12-31',
+          initial_balance: options.initialCapital || 10000,
+          pairs: options.pairs?.length ? options.pairs : undefined,
+        }),
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Hetzner returned ${response.status}`);
+      }
+      
+      const result = await response.json();
+      
+      if (result.status === 'success' && result.metrics) {
+        return {
+          status: 'success',
+          runTime: result.runTime ? result.runTime * 1000 : Date.now() - startTime,
+          metrics: result.metrics,
+        };
+      } else if (result.status === 'error') {
+        this.logger.warn(`Hetzner backtest failed: ${result.error}`);
+        throw new Error(result.error);
+      }
+      
+      return { status: 'completed', runTime: Date.now() - startTime };
+      
+    } catch (e: any) {
+      this.logger.warn(`Hetzner backtest failed, falling back to CCXT: ${e.message}`);
+      
+      // Fallback to CCXT backtest
+      const config: Record<string, any> = {
+        ...template,
+        pairs: options.pairs || template.pairs,
+        entry_conditions: template.entry_conditions,
+        exit_conditions: template.exit_conditions,
+      };
+      
+      return this.runCCXTBacktest(config, options);
     }
-
-    if (options.config?.exitConditions) {
-      config.exit_conditions = options.config.exitConditions.map((override: any, idx: number) => ({
-        ...template.exit_conditions[idx],
-        subfields: { ...template.exit_conditions[idx]?.subfields, ...override },
-      }));
-    }
-
-    // Always use CCXT backtest for now - it's fast and reliable
-    // Python backtest requires full parquet data which is on Hetzner
-    this.logger.log(`Running CCXT backtest for ${strategyId}`);
-    return this.runCCXTBacktest(config, options);
   }
 
   // CCXT-based backtest with RSI+MA+BB strategy logic
