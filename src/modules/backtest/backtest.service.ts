@@ -33,7 +33,7 @@ export class BacktestService {
   private readonly staticDir = path.join(process.cwd(), 'static');
   private isUpdatingData = false;
 
-  // Predefined strategy templates - Only validated strategies
+  // Predefined strategy templates - Only validated long strategy
   private readonly strategyTemplates: Record<string, {
     name: string;
     description: string;
@@ -53,9 +53,9 @@ export class BacktestService {
   }> = {
     'rsi-ma-bb-long': {
       name: 'RSI + MA + BB Long Strategy',
-      description: 'Validated long strategy: Enters when RSI > 70 (15m) + SMA 50 > SMA 200 (1h), exits when BB%B < 0.1 (4h). Backtested on 14 pairs over 2024 with 66% yearly return.',
+      description: 'Validated long strategy: Enters when RSI > 70 (15m) + SMA 50 > SMA 200 (1h), exits when BB%B < 0.1 (4h). Backtested 2020-2025 with 58.5% total return, 8.3% yearly, 2.14 profit factor.',
       category: 'Trend Following / Bull Market',
-      pairs: ['ADA/USDT', 'AVAX/USDT', 'BTC/USDT', 'DOGE/USDT', 'DOT/USDT', 'ETH/USDT', 'HBAR/USDT', 'LINK/USDT', 'LTC/USDT', 'NEAR/USDT', 'SOL/USDT', 'SUI/USDT', 'TRX/USDT', 'XRP/USDT'],
+      pairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ADA/USDT', 'DOGE/USDT'],
       entry_conditions: [
         { indicator: 'RSI', subfields: { 'RSI Length': 28, Timeframe: '15m', Condition: 'Greater Than', 'Signal Value': 70 } },
         { indicator: 'MA', subfields: { 'MA Type': 'SMA', 'Fast MA': 50, 'Slow MA': 200, Condition: 'Greater Than', Timeframe: '1h' } }
@@ -65,21 +65,6 @@ export class BacktestService {
       ],
       conditions_active: true,
       direction: 'long'
-    },
-    'rsi-ma-bb-short': {
-      name: 'RSI + MA + BB Short Strategy',
-      description: 'Mirror short strategy: Enters when RSI < 30 (15m) + SMA 50 < SMA 200 (1h), exits when BB%B > 0.9 (4h). Best for bear markets and corrections.',
-      category: 'Trend Following / Bear Market',
-      pairs: ['ADA/USDT', 'AVAX/USDT', 'BTC/USDT', 'DOGE/USDT', 'DOT/USDT', 'ETH/USDT', 'HBAR/USDT', 'LINK/USDT', 'LTC/USDT', 'NEAR/USDT', 'SOL/USDT', 'SUI/USDT', 'TRX/USDT', 'XRP/USDT'],
-      entry_conditions: [
-        { indicator: 'RSI', subfields: { 'RSI Length': 28, Timeframe: '15m', Condition: 'Less Than', 'Signal Value': 30 } },
-        { indicator: 'MA', subfields: { 'MA Type': 'SMA', 'Fast MA': 50, 'Slow MA': 200, Condition: 'Less Than', Timeframe: '1h' } }
-      ],
-      exit_conditions: [
-        { indicator: 'BollingerBands', subfields: { 'BB% Period': 20, Deviation: 1, Condition: 'Greater Than', Timeframe: '4h', 'Signal Value': 0.9 } }
-      ],
-      conditions_active: true,
-      direction: 'short'
     }
   };
 
@@ -239,6 +224,7 @@ print(json.dumps(result))
     const strategies: any[] = [];
     
     // Real backtest metrics from validated strategies (2024 data, 14 pairs)
+    // Updated with 5-year backtest results (2020-2025, BTC+ETH)
     const defaultMetrics: Record<string, { 
       cagr: number; 
       sharpe: number; 
@@ -250,25 +236,15 @@ print(json.dumps(result))
       netProfitUsd: string;
     }> = {
       'rsi-ma-bb-long': { 
-        cagr: 66.42, 
-        sharpe: 1.71, 
-        sortino: 2.62,
-        maxDD: 17.28, 
-        winRate: 37.4, 
-        totalTrades: 174,
-        profitFactor: 2.21,
-        netProfitUsd: '$6,605.93'
-      },
-      'rsi-ma-bb-short': { 
-        cagr: -12.58, 
-        sharpe: -0.57, 
-        sortino: -0.46,
-        maxDD: 23.34, 
-        winRate: 51.3, 
-        totalTrades: 115,
-        profitFactor: 0.62,
-        netProfitUsd: '-$1,251.64'
-      },
+        cagr: 8.25,  // Yearly return from 5-year backtest
+        sharpe: 1.19, 
+        sortino: 1.26,
+        maxDD: 4.69,  // Very low drawdown
+        winRate: 47.7, 
+        totalTrades: 220,
+        profitFactor: 2.14,
+        netProfitUsd: '$5,845.86'
+      }
     };
     
     for (const [id, template] of Object.entries(this.strategyTemplates)) {
