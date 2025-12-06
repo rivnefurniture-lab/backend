@@ -51,12 +51,15 @@ def data_status():
 
 @app.route('/data/latest/<symbol>')
 def get_latest(symbol):
-    """Get latest data row for a symbol"""
+    """Get latest data row for a symbol. Use underscore format: BTC_USDT"""
     if not check_auth():
         return jsonify({'error': 'Unauthorized'}), 401
     
-    # Map symbol to filename
-    filename = f"{symbol.replace('/', '_')}_all_tf_merged.parquet"
+    # Map symbol to filename - expect BTC_USDT format
+    clean_symbol = symbol.upper().replace('/', '_')
+    if not clean_symbol.endswith('_USDT') and 'USDT' in clean_symbol:
+        clean_symbol = clean_symbol.replace('USDT', '_USDT')
+    filename = f"{clean_symbol}_all_tf_merged.parquet"
     filepath = os.path.join(DATA_DIR, filename)
     
     if not os.path.exists(filepath):
@@ -83,13 +86,17 @@ def get_latest(symbol):
 
 @app.route('/data/range/<symbol>')
 def get_range(symbol):
-    """Get data range for a symbol"""
+    """Get data range for a symbol. Use underscore format: BTC_USDT"""
     if not check_auth():
         return jsonify({'error': 'Unauthorized'}), 401
     
     limit = request.args.get('limit', 100, type=int)
     
-    filename = f"{symbol.replace('/', '_')}_all_tf_merged.parquet"
+    # Map symbol to filename - expect BTC_USDT format
+    clean_symbol = symbol.upper().replace('/', '_')
+    if not clean_symbol.endswith('_USDT') and 'USDT' in clean_symbol:
+        clean_symbol = clean_symbol.replace('USDT', '_USDT')
+    filename = f"{clean_symbol}_all_tf_merged.parquet"
     filepath = os.path.join(DATA_DIR, filename)
     
     if not os.path.exists(filepath):
@@ -125,7 +132,11 @@ def check_signal():
     symbol = body.get('symbol')
     conditions = body.get('conditions', [])
     
-    filename = f"{symbol.replace('/', '_')}_all_tf_merged.parquet"
+    # Map symbol to filename
+    clean_symbol = symbol.replace('/', '_').replace('%2F', '_').upper()
+    if '_' not in clean_symbol:
+        clean_symbol = clean_symbol.replace('USDT', '_USDT')
+    filename = f"{clean_symbol}_all_tf_merged.parquet"
     filepath = os.path.join(DATA_DIR, filename)
     
     if not os.path.exists(filepath):

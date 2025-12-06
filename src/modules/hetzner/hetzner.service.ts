@@ -88,7 +88,9 @@ export class HetznerService {
       return cached.data;
     }
 
-    const result = await this.request<{ symbol: string; timestamp: string; data: DataRow }>(`/data/latest/${encodeURIComponent(symbol)}`);
+    // Convert BTC/USDT to BTC_USDT format for API
+    const apiSymbol = symbol.replace('/', '_');
+    const result = await this.request<{ symbol: string; timestamp: string; data: DataRow }>(`/data/latest/${apiSymbol}`);
     
     if (result?.data) {
       this.cache.set(cacheKey, { data: result.data, timestamp: Date.now() });
@@ -98,7 +100,9 @@ export class HetznerService {
   }
 
   async getDataRange(symbol: string, limit: number = 100): Promise<DataRow[]> {
-    const result = await this.request<{ symbol: string; count: number; data: DataRow[] }>(`/data/range/${encodeURIComponent(symbol)}?limit=${limit}`);
+    // Convert BTC/USDT to BTC_USDT format for API
+    const apiSymbol = symbol.replace('/', '_');
+    const result = await this.request<{ symbol: string; count: number; data: DataRow[] }>(`/data/range/${apiSymbol}?limit=${limit}`);
     return result?.data || [];
   }
 

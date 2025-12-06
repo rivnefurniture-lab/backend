@@ -128,13 +128,17 @@ def update_symbol(exchange, symbol):
             if 'timestamp' in existing_df.columns:
                 existing_df.set_index('timestamp', inplace=True)
             
+            # Ensure index is datetime
+            if not isinstance(existing_df.index, pd.DatetimeIndex):
+                existing_df.index = pd.to_datetime(existing_df.index)
+            
             # Merge: keep existing, add new
             df_1m = pd.concat([existing_df, new_df])
             df_1m = df_1m[~df_1m.index.duplicated(keep='last')]
             df_1m.sort_index(inplace=True)
             
-            # Keep last 5 years only
-            cutoff = datetime.now(timezone.utc) - timedelta(days=365*5)
+            # Keep last 5 years only - use pandas Timestamp for comparison
+            cutoff = pd.Timestamp.now(tz='UTC') - pd.Timedelta(days=365*5)
             df_1m = df_1m[df_1m.index >= cutoff]
         else:
             df_1m = new_df
