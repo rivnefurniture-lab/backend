@@ -68,8 +68,8 @@ def get_user_payload(data):
 def gather_required_columns(entry_conditions, safety_conditions, exit_conditions):
     required = {"timestamp", "open", "high", "low", "close", "volume"}
     tf_mapping = {
-        "1m": "Bar_Close_1m", "5m": "Bar_Close_5m", "15m": "Bar_Close_15m",
-        "1h": "Bar_Close_1h", "4h": "Bar_Close_4h", "1d": "Bar_Close_1d"
+        "1m": "close", "5m": "close_5m", "15m": "close_15m",
+        "1h": "close_1h", "4h": "close_4h", "1d": "close_1d"
     }
 
     def parse_one(cond):
@@ -168,7 +168,7 @@ def gather_required_columns(entry_conditions, safety_conditions, exit_conditions
 def load_parquets_in_parallel(pairs, required_cols):
     results = {}
     def load_one(pair):
-        file_path = f'static/{pair.replace("/", "_")}_all_tf_merged.parquet'
+        file_path = os.path.join(DATA_DIR, f'{pair.replace("/", "_")}_all_tf_merged.parquet')
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Parquet file not found for {pair}: {file_path}")
         df = pd.read_parquet(file_path, columns=required_cols)
@@ -199,8 +199,8 @@ def check_all_user_conditions(row, conditions, prev_row=None):
         subs = cond.get("subfields", {})
         tf = subs.get("Timeframe", "1m")
         tf_mapping = {
-            '1m': 'Bar_Close_1m', '5m': 'Bar_Close_5m', '15m': 'Bar_Close_15m',
-            '1h': 'Bar_Close_1h', '4h': 'Bar_Close_4h', '1d': 'Bar_Close_1d'
+            '1m': 'close', '5m': 'close_5m', '15m': 'close_15m',
+            '1h': 'close_1h', '4h': 'close_4h', '1d': 'close_1d'
         }
         if not row[tf_mapping[tf]]:
             return False
