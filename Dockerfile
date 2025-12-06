@@ -18,6 +18,10 @@ FROM node:20-alpine AS production
 
 WORKDIR /app
 
+# Install Python and required packages for backtesting
+RUN apk add --no-cache python3 py3-pip py3-pandas py3-numpy && \
+    ln -sf python3 /usr/bin/python
+
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nestjs -u 1001
 

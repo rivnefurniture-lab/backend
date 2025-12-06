@@ -20,7 +20,9 @@ async function bootstrap() {
     'http://localhost:5173',
     'http://localhost:5174',
     'http://localhost:5175',
-    // Production - add your Vercel domains
+    // Production domains
+    'https://algotcha.com',
+    'https://www.algotcha.com',
     process.env.FRONTEND_URL,
     // Vercel preview deployments (wildcard pattern handled below)
   ].filter(Boolean);
