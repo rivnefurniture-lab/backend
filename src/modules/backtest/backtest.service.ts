@@ -1008,168 +1008,208 @@ print(json.dumps(result))
       }));
     }
 
-    // Build the command for Python backtest
-    const scriptPath = path.join(this.scriptsDir, 'backtest.py');
-    
-    if (!fs.existsSync(scriptPath)) {
-      this.logger.warn('Python backtest script not found, using CCXT fallback');
-      return this.runCCXTBacktest(config, options);
-    }
-
-    // Prepare args for Python backtest
-    const args: string[] = [
-      scriptPath,
-      '--start-date', options.startDate || '2024-01-01',
-      '--end-date', options.endDate || '2024-12-31',
-      '--initial-capital', String(options.initialCapital || 10000),
-      '--direction', template.direction || 'long',
-      '--pairs', (options.pairs || template.pairs).join(','),
-    ];
-
-    // Add entry conditions
-    if (config.entry_conditions) {
-      args.push('--entry-conditions', JSON.stringify(config.entry_conditions));
-    }
-    if (config.exit_conditions) {
-      args.push('--exit-conditions', JSON.stringify(config.exit_conditions));
-    }
-
-    return new Promise((resolve) => {
-      this.logger.log(`Running backtest: ${args.join(' ')}`);
-      
-      const python = spawn('python3', args, {
-        cwd: process.cwd(),
-        env: { ...process.env, PYTHONUNBUFFERED: '1' },
-      });
-
-      let stdout = '';
-      let stderr = '';
-
-      python.stdout.on('data', (data) => { 
-        stdout += data.toString(); 
-        this.logger.debug(`Backtest stdout: ${data.toString().substring(0, 200)}`);
-      });
-      
-      python.stderr.on('data', (data) => { 
-        stderr += data.toString();
-        this.logger.debug(`Backtest stderr: ${data.toString().substring(0, 200)}`);
-      });
-
-      python.on('close', (code) => {
-        const runTime = Date.now() - startTime;
-        this.logger.log(`Backtest completed in ${runTime}ms with code ${code}`);
-
-        if (code !== 0) {
-          this.logger.error(`Backtest failed: ${stderr}`);
-          return resolve({ status: 'error', error: stderr || 'Backtest failed', runTime });
-        }
-
-        try {
-          // Try to parse the final metrics from stdout
-          const lines = stdout.trim().split('\n');
-          const lastLine = lines[lines.length - 1];
-          
-          if (lastLine.startsWith('{')) {
-            const metrics = JSON.parse(lastLine);
-            return resolve({ status: 'success', metrics, runTime });
-          }
-          
-          // Look for JSON anywhere in output
-          const jsonMatch = stdout.match(/\{[^{}]*"net_profit"[^{}]*\}/);
-          if (jsonMatch) {
-            const metrics = JSON.parse(jsonMatch[0]);
-            return resolve({ status: 'success', metrics, runTime });
-          }
-          
-          return resolve({ status: 'completed', runTime });
-        } catch (e) {
-          this.logger.warn(`Could not parse backtest output: ${(e as Error).message}`);
-          return resolve({ status: 'completed', runTime });
-        }
-      });
-
-      // Timeout after 5 minutes
-      setTimeout(() => {
-        python.kill();
-        resolve({ status: 'error', error: 'Backtest timed out (5 min)' });
-      }, 300000);
-    });
+    // Always use CCXT backtest for now - it's fast and reliable
+    // Python backtest requires full parquet data which is on Hetzner
+    this.logger.log(`Running CCXT backtest for ${strategyId}`);
+    return this.runCCXTBacktest(config, options);
   }
 
-  // CCXT-based backtest fallback (simpler but faster)
+  // CCXT-based backtest with RSI+MA+BB strategy logic
   private async runCCXTBacktest(
     config: Record<string, any>,
     options: { startDate?: string; endDate?: string; initialCapital?: number }
-  ): Promise<{ status: string; metrics?: BacktestMetrics; error?: string }> {
+  ): Promise<{ status: string; metrics?: BacktestMetrics; error?: string; runTime?: number }> {
+    const startTime = Date.now();
+    
     try {
       const exchange = new ccxt.binance({ enableRateLimit: true });
-      const symbol = config.pairs?.[0] || 'BTC/USDT';
+      const pairs = config.pairs || ['BTC/USDT'];
       const initial = options.initialCapital || 10000;
+      const direction = config.direction || 'long';
 
-      // Fetch daily candles for quick backtest
       const since = new Date(options.startDate || '2024-01-01').getTime();
       const until = new Date(options.endDate || '2024-12-31').getTime();
-      
-      const ohlcv = await exchange.fetchOHLCV(symbol, '1d', since, 365);
-      const validCandles = ohlcv.filter((c: any) => c[0] <= until);
+      const daysInPeriod = Math.ceil((until - since) / (1000 * 60 * 60 * 24));
 
-      // Simple momentum strategy simulation
+      // Track portfolio
       let balance = initial;
-      let position = 0;
-      let trades = 0;
-      let wins = 0;
+      let totalTrades = 0;
+      let winningTrades = 0;
       let maxBalance = initial;
       let maxDrawdown = 0;
+      let grossProfit = 0;
+      let grossLoss = 0;
 
-      for (let i = 20; i < validCandles.length; i++) {
-        const price = validCandles[i][4]; // close
-        const prevPrice = validCandles[i - 1][4];
-        
-        // Simple momentum: buy if up 3 days in row, sell if down 2 days
-        const momentum = price > prevPrice ? 1 : -1;
-        
-        if (position === 0 && momentum > 0) {
-          position = balance / price;
-          balance = 0;
-          trades++;
-        } else if (position > 0 && momentum < 0) {
-          const sellValue = position * price;
-          if (sellValue > initial * 0.9) wins++; // profitable if above 90% of start
-          balance = sellValue;
-          position = 0;
+      // Process each pair
+      for (const symbol of pairs.slice(0, 5)) { // Limit to 5 pairs for speed
+        try {
+          // Fetch 4h candles (better for RSI/MA calculations)
+          const ohlcv = await exchange.fetchOHLCV(symbol, '4h', since, 500);
+          const validCandles = ohlcv.filter((c: number[]) => c[0] <= until);
+          
+          if (validCandles.length < 50) continue;
+
+          // Calculate indicators
+          const closes = validCandles.map((c: number[]) => c[4]);
+          const rsi = this.calculateRSI(closes, 28);
+          const sma50 = this.calculateSMA(closes, 50);
+          const sma200 = this.calculateSMA(closes, 200);
+          const bbPercent = this.calculateBBPercent(closes, 20);
+
+          let inPosition = false;
+          let entryPrice = 0;
+          let positionSize = 0;
+          const orderSize = balance * 0.1; // 10% per trade
+
+          for (let i = 200; i < validCandles.length; i++) {
+            const price = closes[i];
+            const currentRSI = rsi[i];
+            const currentSMA50 = sma50[i];
+            const currentSMA200 = sma200[i];
+            const currentBBPercent = bbPercent[i];
+
+            if (!inPosition) {
+              // Entry logic based on direction
+              let shouldEnter = false;
+              if (direction === 'long') {
+                // Long: RSI > 70 && SMA50 > SMA200
+                shouldEnter = currentRSI > 70 && currentSMA50 > currentSMA200;
+              } else {
+                // Short: RSI < 30 && SMA50 < SMA200
+                shouldEnter = currentRSI < 30 && currentSMA50 < currentSMA200;
+              }
+
+              if (shouldEnter && balance > orderSize) {
+                inPosition = true;
+                entryPrice = price;
+                positionSize = orderSize / price;
+                balance -= orderSize;
+                totalTrades++;
+              }
+            } else {
+              // Exit logic based on direction
+              let shouldExit = false;
+              if (direction === 'long') {
+                // Long exit: BB%B < 0.1
+                shouldExit = currentBBPercent < 0.1;
+              } else {
+                // Short exit: BB%B > 0.9
+                shouldExit = currentBBPercent > 0.9;
+              }
+
+              if (shouldExit) {
+                const exitValue = positionSize * price;
+                const pnl = direction === 'long' 
+                  ? exitValue - (positionSize * entryPrice)
+                  : (positionSize * entryPrice) - exitValue;
+                
+                balance += positionSize * entryPrice + pnl;
+                
+                if (pnl > 0) {
+                  winningTrades++;
+                  grossProfit += pnl;
+                } else {
+                  grossLoss += Math.abs(pnl);
+                }
+
+                inPosition = false;
+                positionSize = 0;
+              }
+            }
+
+            // Track drawdown
+            const currentValue = balance + (inPosition ? positionSize * price : 0);
+            maxBalance = Math.max(maxBalance, currentValue);
+            const dd = (maxBalance - currentValue) / maxBalance;
+            maxDrawdown = Math.max(maxDrawdown, dd);
+          }
+
+          // Close any remaining position at end
+          if (inPosition) {
+            const lastPrice = closes[closes.length - 1];
+            const exitValue = positionSize * lastPrice;
+            const pnl = direction === 'long'
+              ? exitValue - (positionSize * entryPrice)
+              : (positionSize * entryPrice) - exitValue;
+            balance += positionSize * entryPrice + pnl;
+            if (pnl > 0) { winningTrades++; grossProfit += pnl; }
+            else { grossLoss += Math.abs(pnl); }
+          }
+
+        } catch (pairError: any) {
+          this.logger.warn(`Failed to fetch ${symbol}: ${pairError.message}`);
         }
-
-        const currentValue = balance + position * price;
-        maxBalance = Math.max(maxBalance, currentValue);
-        const dd = (maxBalance - currentValue) / maxBalance;
-        maxDrawdown = Math.max(maxDrawdown, dd);
       }
 
-      const finalValue = balance + position * validCandles[validCandles.length - 1][4];
-      const netProfit = ((finalValue - initial) / initial) * 100;
+      const finalBalance = balance;
+      const netProfit = ((finalBalance - initial) / initial) * 100;
+      const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 999 : 0;
+      const runTime = Date.now() - startTime;
 
       return {
         status: 'success',
+        runTime,
         metrics: {
-          net_profit: netProfit,
-          net_profit_usd: `$${(finalValue - initial).toFixed(2)}`,
-          total_profit: netProfit,
-          total_profit_usd: `$${(finalValue - initial).toFixed(2)}`,
-          max_drawdown: maxDrawdown * 100,
-          max_realized_drawdown: maxDrawdown * 100,
-          sharpe_ratio: netProfit / (maxDrawdown * 100 || 1),
-          sortino_ratio: netProfit / (maxDrawdown * 100 || 1) * 1.2,
-          win_rate: trades > 0 ? (wins / trades) * 100 : 0,
-          total_trades: trades,
-          profit_factor: wins > 0 ? (wins / (trades - wins || 1)) : 0,
-          avg_profit_per_trade: trades > 0 ? netProfit / trades : 0,
-          yearly_return: netProfit,
+          net_profit: parseFloat(netProfit.toFixed(2)),
+          net_profit_usd: `$${(finalBalance - initial).toFixed(2)}`,
+          total_profit: parseFloat(netProfit.toFixed(2)),
+          total_profit_usd: `$${(finalBalance - initial).toFixed(2)}`,
+          max_drawdown: parseFloat((maxDrawdown * 100).toFixed(2)),
+          max_realized_drawdown: parseFloat((maxDrawdown * 100).toFixed(2)),
+          sharpe_ratio: parseFloat((netProfit / (maxDrawdown * 100 || 1)).toFixed(2)),
+          sortino_ratio: parseFloat((netProfit / (maxDrawdown * 100 || 1) * 1.2).toFixed(2)),
+          win_rate: totalTrades > 0 ? parseFloat(((winningTrades / totalTrades) * 100).toFixed(1)) : 0,
+          total_trades: totalTrades,
+          profit_factor: parseFloat(profitFactor.toFixed(2)),
+          avg_profit_per_trade: totalTrades > 0 ? parseFloat((netProfit / totalTrades).toFixed(2)) : 0,
+          yearly_return: parseFloat((netProfit * (365 / daysInPeriod)).toFixed(2)),
           exposure_time_frac: 0.5,
         },
       };
     } catch (e: any) {
       this.logger.error(`CCXT backtest failed: ${e.message}`);
-      return { status: 'error', error: e.message };
+      return { status: 'error', error: e.message, runTime: Date.now() - startTime };
     }
+  }
+
+  // Calculate Simple Moving Average (for CCXT backtest)
+  private calculateSMA(closes: number[], period: number): number[] {
+    const sma: number[] = new Array(closes.length).fill(0);
+    for (let i = period - 1; i < closes.length; i++) {
+      let sum = 0;
+      for (let j = 0; j < period; j++) {
+        sum += closes[i - j];
+      }
+      sma[i] = sum / period;
+    }
+    return sma;
+  }
+
+  // Calculate Bollinger Bands %B (for CCXT backtest)
+  private calculateBBPercent(closes: number[], period: number, stdDev = 2): number[] {
+    const bbPercent: number[] = new Array(closes.length).fill(0.5);
+    
+    for (let i = period - 1; i < closes.length; i++) {
+      let sum = 0;
+      for (let j = 0; j < period; j++) {
+        sum += closes[i - j];
+      }
+      const sma = sum / period;
+      
+      let variance = 0;
+      for (let j = 0; j < period; j++) {
+        variance += Math.pow(closes[i - j] - sma, 2);
+      }
+      const std = Math.sqrt(variance / period);
+      
+      const upper = sma + stdDev * std;
+      const lower = sma - stdDev * std;
+      
+      if (upper !== lower) {
+        bbPercent[i] = (closes[i] - lower) / (upper - lower);
+      }
+    }
+    
+    return bbPercent;
   }
 }
