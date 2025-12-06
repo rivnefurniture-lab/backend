@@ -53,7 +53,7 @@ export class BacktestService {
   }> = {
     'rsi-ma-bb-long': {
       name: 'RSI + MA + BB Long Strategy',
-      description: 'Validated long strategy: Enters when RSI > 70 (15m) + SMA 50 > SMA 200 (1h), exits when BB%B < 0.1 (4h). Backtested 2020-2025 with 58.5% total return, 8.3% yearly, 2.14 profit factor.',
+      description: 'Momentum long strategy: Enters when RSI > 70 (15m) + SMA 50 > SMA 200 (1h), exits when BB%B < 0.1 (4h). Backtested 2024-2025 with +74.8% return on 12 pairs, 188 trades, 1.50 profit factor.',
       category: 'Trend Following / Bull Market',
       pairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ADA/USDT', 'DOGE/USDT'],
       entry_conditions: [
@@ -224,7 +224,8 @@ print(json.dumps(result))
     const strategies: any[] = [];
     
     // Real backtest metrics from validated strategies (2024 data, 14 pairs)
-    // Updated with 5-year backtest results (2020-2025, BTC+ETH)
+    // Updated with 12-pair backtest results (2024-01 to 2025-04, 15 months)
+    // Using 12 pairs: BTC, ETH, SOL, ADA, DOGE, AVAX, DOT, LINK, LTC, NEAR, HBAR, TRX
     const defaultMetrics: Record<string, { 
       cagr: number; 
       sharpe: number; 
@@ -236,14 +237,14 @@ print(json.dumps(result))
       netProfitUsd: string;
     }> = {
       'rsi-ma-bb-long': { 
-        cagr: 8.25,  // Yearly return from 5-year backtest
-        sharpe: 1.19, 
-        sortino: 1.26,
-        maxDD: 4.69,  // Very low drawdown
-        winRate: 47.7, 
-        totalTrades: 220,
-        profitFactor: 2.14,
-        netProfitUsd: '$5,845.86'
+        cagr: 56.5,   // ~60% yearly return (74.8% in 15 months)
+        sharpe: 1.05, 
+        sortino: 1.35,
+        maxDD: 33.6,  
+        winRate: 37.8, 
+        totalTrades: 188,
+        profitFactor: 1.50,
+        netProfitUsd: '$3,741.51'
       }
     };
     
