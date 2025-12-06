@@ -2,10 +2,9 @@ import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { StartStrategyDto } from './dto/start-strategy.dto';
 import { StopStrategyDto } from './dto/stop-strategy.dto';
 import { PrismaService } from '../../prisma/prisma.service';
+import { HetznerService } from '../hetzner/hetzner.service';
 import { Exchange } from 'ccxt';
-import { spawn } from 'child_process';
 import * as path from 'path';
-import * as fs from 'fs';
 
 interface ActiveJob {
   id: string;
@@ -29,27 +28,29 @@ interface ActiveJob {
   };
 }
 
-interface ParquetRow {
-  timestamp: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-  [key: string]: any; // RSI_14, SMA_50, BB_%B_20_2, etc.
-}
-
 @Injectable()
 export class StrategiesService {
   private readonly logger = new Logger(StrategiesService.name);
   private jobs: Map<string, ActiveJob> = new Map();
   private userIdCache: Map<string, { id: number; timestamp: number }> = new Map();
   private readonly CACHE_TTL = 5 * 60 * 1000;
-  // Use process.cwd() for Docker - __dirname points to dist/src/modules/strategies
   private readonly staticDir = path.join(process.cwd(), 'static');
 
-  constructor(private readonly prisma: PrismaService) {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly hetzner: HetznerService,
+  ) {
     this.logger.log('StrategiesService initialized');
+    this.checkHetznerConnection();
+  }
+
+  private async checkHetznerConnection() {
+    const healthy = await this.hetzner.isHealthy();
+    if (healthy) {
+      this.logger.log('✅ Hetzner data server connected');
+    } else {
+      this.logger.warn('⚠️ Hetzner data server not available - live trading may not work');
+    }
   }
 
   // Resolve userId (supabaseId string -> numeric id)
@@ -388,10 +389,10 @@ except Exception as e:
 
       for (const symbol of job.symbols) {
         try {
-          // Read latest data from parquet
-          const data = await this.readLatestFromParquet(symbol);
+          // Read latest data from Hetzner data server
+          const data = await this.hetzner.getLatestData(symbol);
           if (!data) {
-            this.logger.warn(`[${job.id}] No data for ${symbol}`);
+            this.logger.warn(`[${job.id}] No data for ${symbol} from Hetzner`);
             continue;
           }
 

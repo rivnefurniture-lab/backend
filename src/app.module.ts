@@ -9,12 +9,14 @@ import { BacktestModule } from './modules/backtest/backtest.module';
 import { TradesModule } from './modules/trades/trades.module';
 import { RefundModule } from './modules/refund/refund.module';
 import { UserModule } from './modules/user/user.module';
+import { HetznerModule } from './modules/hetzner/hetzner.module';
 import { ConfigModule } from '@nestjs/config';
 import { HealthController } from './health.controller';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    HetznerModule, // Global - provides data access
     CommentsModule,
     SseModule,
     ExchangeModule,
