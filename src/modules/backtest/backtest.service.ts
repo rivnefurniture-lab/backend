@@ -28,8 +28,9 @@ export interface BacktestMetrics {
 @Injectable()
 export class BacktestService {
   private readonly logger = new Logger(BacktestService.name);
-  private readonly scriptsDir = path.join(__dirname, '..', '..', '..', 'scripts');
-  private readonly staticDir = path.join(__dirname, '..', '..', '..', 'static');
+  // Use process.cwd() for Docker - __dirname points to dist/src/modules/backtest
+  private readonly scriptsDir = path.join(process.cwd(), 'scripts');
+  private readonly staticDir = path.join(process.cwd(), 'static');
   private isUpdatingData = false;
 
   // Predefined strategy templates - Only validated strategies

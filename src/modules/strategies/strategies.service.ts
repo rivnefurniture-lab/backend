@@ -45,7 +45,8 @@ export class StrategiesService {
   private jobs: Map<string, ActiveJob> = new Map();
   private userIdCache: Map<string, { id: number; timestamp: number }> = new Map();
   private readonly CACHE_TTL = 5 * 60 * 1000;
-  private readonly staticDir = path.join(__dirname, '..', '..', '..', 'static');
+  // Use process.cwd() for Docker - __dirname points to dist/src/modules/strategies
+  private readonly staticDir = path.join(process.cwd(), 'static');
 
   constructor(private readonly prisma: PrismaService) {
     this.logger.log('StrategiesService initialized');
