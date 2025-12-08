@@ -6,6 +6,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 
+// Supabase Proxy Controller - Forwards auth requests to Supabase
 @Controller('api/supabase-proxy')
 export class SupabaseProxyController {
   private readonly supabaseUrl = 'https://kgjxftjkxbdzzlsgohds.supabase.co';
