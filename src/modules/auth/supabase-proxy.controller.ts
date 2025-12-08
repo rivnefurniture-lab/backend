@@ -9,9 +9,9 @@ import {
 // Supabase Proxy Controller - Forwards auth requests to Supabase
 @Controller('api/supabase-proxy')
 export class SupabaseProxyController {
-  private readonly supabaseUrl = 'https://kgjxftjkxbdzzlsgohds.supabase.co';
+  private readonly supabaseUrl = 'https://amchsdenmcbdpaoamoie.supabase.co';
   private readonly supabaseKey =
-    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtnanhmdGpreGJkenpsc2dvaGRzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzMzMzE5MjIsImV4cCI6MjA0ODkwNzkyMn0.ApcKqvqmjbvD12Ys7r6c4EATNnXvb-rINrpvJjO-rTE';
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFtY2hzZGVubWNiZHBhb2Ftb2llIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk3NjA1MjcsImV4cCI6MjA3NTMzNjUyN30.tHWks2yIwBCFqQhAHTqv3Jycr_XB48aRVY4tOuBsHas';
 
   @Post('login')
   async login(@Body() body: { email: string; password: string }) {
