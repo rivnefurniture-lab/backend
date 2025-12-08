@@ -28,25 +28,28 @@ async function bootstrap() {
   ].filter(Boolean);
 
   app.use(cookieParser());
-  
+
   // Enable CORS with proper production support
   app.enableCors({
-    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    origin: (
+      origin: string | undefined,
+      callback: (err: Error | null, allow?: boolean) => void,
+    ) => {
       // Allow requests with no origin (mobile apps, curl, etc.)
       if (!origin) {
         return callback(null, true);
       }
-      
+
       // Check if origin is in allowed list
       if (ALLOWED_ORIGINS.includes(origin)) {
         return callback(null, true);
       }
-      
+
       // Allow all Vercel preview deployments
       if (origin.includes('.vercel.app')) {
         return callback(null, true);
       }
-      
+
       // Allow Railway deployments
       if (origin.includes('.railway.app')) {
         return callback(null, true);
@@ -56,21 +59,29 @@ async function bootstrap() {
       if (process.env.NODE_ENV !== 'production') {
         return callback(null, true);
       }
-      
+
       console.log('CORS blocked origin:', origin);
       callback(null, false);
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Accept',
+      'Origin',
+      'X-Requested-With',
+    ],
   });
 
   // Global validation pipe
-  app.useGlobalPipes(new ValidationPipe({
-    whitelist: true,
-    transform: true,
-    forbidNonWhitelisted: false,
-  }));
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: false,
+    }),
+  );
 
   // Swagger API docs
   const config = new DocumentBuilder()
@@ -90,3 +101,4 @@ async function bootstrap() {
 }
 
 bootstrap();
+// Deployed at: Mon Dec  8 02:54:08 EET 2025
