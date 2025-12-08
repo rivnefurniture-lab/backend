@@ -5,7 +5,6 @@ import {
   Body,
   Header,
   HttpException,
-  HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { HetznerService } from './modules/hetzner/hetzner.service';
@@ -63,41 +62,11 @@ export class HealthController {
   @Post('auth/proxy/login')
   @ApiOperation({ summary: 'Proxy login to Supabase' })
   async proxyLogin(@Body() body: { email: string; password: string }) {
-    try {
-      const response = await fetch(
-        `${this.supabaseUrl}/auth/v1/token?grant_type=password`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            apikey: this.supabaseKey,
-          },
-          body: JSON.stringify({
-            email: body.email,
-            password: body.password,
-          }),
-        },
-      );
+    console.log('Proxy login attempt for:', body.email);
 
-      const data = (await response.json()) as Record<string, unknown>;
-
-      if (!response.ok) {
-        throw new HttpException(data, response.status);
-      }
-
-      return data;
-    } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error ? error.message : 'Authentication failed';
-      throw new HttpException(errorMessage, HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-  }
-
-  @Post('auth/proxy/register')
-  @ApiOperation({ summary: 'Proxy register to Supabase' })
-  async proxyRegister(@Body() body: { email: string; password: string }) {
-    try {
-      const response = await fetch(`${this.supabaseUrl}/auth/v1/signup`, {
+    const response = await fetch(
+      `${this.supabaseUrl}/auth/v1/token?grant_type=password`,
+      {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -107,48 +76,115 @@ export class HealthController {
           email: body.email,
           password: body.password,
         }),
-      });
+      },
+    );
 
-      const data = (await response.json()) as Record<string, unknown>;
+    const data = (await response.json()) as Record<string, unknown>;
+    console.log('Supabase response status:', response.status);
 
-      if (!response.ok) {
-        throw new HttpException(data, response.status);
-      }
-
-      return data;
-    } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error ? error.message : 'Registration failed';
-      throw new HttpException(errorMessage, HttpStatus.INTERNAL_SERVER_ERROR);
+    if (!response.ok) {
+      // Return Supabase error directly to client
+      const errorData = data as {
+        msg?: string;
+        error_description?: string;
+        error?: string;
+      };
+      throw new HttpException(
+        {
+          message:
+            errorData.msg ||
+            errorData.error_description ||
+            'Authentication failed',
+          error: errorData.error || 'auth_error',
+          statusCode: response.status,
+        },
+        response.status,
+      );
     }
+
+    return data;
+  }
+
+  @Post('auth/proxy/register')
+  @ApiOperation({ summary: 'Proxy register to Supabase' })
+  async proxyRegister(@Body() body: { email: string; password: string }) {
+    console.log('Proxy register attempt for:', body.email);
+
+    const response = await fetch(`${this.supabaseUrl}/auth/v1/signup`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: this.supabaseKey,
+      },
+      body: JSON.stringify({
+        email: body.email,
+        password: body.password,
+      }),
+    });
+
+    const data = (await response.json()) as Record<string, unknown>;
+    console.log('Supabase register response status:', response.status);
+
+    if (!response.ok) {
+      const errorData = data as {
+        msg?: string;
+        error_description?: string;
+        error?: string;
+      };
+      throw new HttpException(
+        {
+          message:
+            errorData.msg ||
+            errorData.error_description ||
+            'Registration failed',
+          error: errorData.error || 'register_error',
+          statusCode: response.status,
+        },
+        response.status,
+      );
+    }
+
+    return data;
   }
 
   @Post('auth/proxy/reset')
   @ApiOperation({ summary: 'Proxy password reset to Supabase' })
   async proxyReset(@Body() body: { email: string }) {
-    try {
-      const response = await fetch(`${this.supabaseUrl}/auth/v1/recover`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: this.supabaseKey,
+    console.log('Proxy reset attempt for:', body.email);
+
+    const response = await fetch(`${this.supabaseUrl}/auth/v1/recover`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: this.supabaseKey,
+      },
+      body: JSON.stringify({
+        email: body.email,
+      }),
+    });
+
+    const data = (await response.json()) as Record<string, unknown>;
+    console.log('Supabase reset response status:', response.status);
+
+    if (!response.ok) {
+      const errorData = data as {
+        msg?: string;
+        error_description?: string;
+        error?: string;
+      };
+      throw new HttpException(
+        {
+          message:
+            errorData.msg ||
+            errorData.error_description ||
+            'Password reset failed',
+          error: errorData.error || 'reset_error',
+          statusCode: response.status,
         },
-        body: JSON.stringify({
-          email: body.email,
-        }),
-      });
-
-      const data = (await response.json()) as Record<string, unknown>;
-
-      if (!response.ok) {
-        throw new HttpException(data, response.status);
-      }
-
-      return data;
-    } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error ? error.message : 'Password reset failed';
-      throw new HttpException(errorMessage, HttpStatus.INTERNAL_SERVER_ERROR);
+        response.status,
+      );
     }
+
+    return data;
   }
 }
