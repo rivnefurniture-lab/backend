@@ -51,6 +51,7 @@ model User {
   trades              Trade[]
   backtestResults     BacktestResult[]
   exchangeConnections ExchangeConnection[]
+  backtestQueue       BacktestQueue[]
 }
 
 model ExchangeConnection {
@@ -199,4 +200,37 @@ model RefundRequest {
   adminNotes  String?
   createdAt   DateTime  @default(now())
   processedAt DateTime?
+}
+
+model BacktestQueue {
+  id              Int       @id @default(autoincrement())
+  userId          Int
+  user            User      @relation(fields: [userId], references: [id])
+  
+  // Backtest configuration
+  strategyName    String
+  payload         String    // JSON payload for backtest
+  
+  // Queue status
+  status          String    @default("queued")  // queued, processing, completed, failed
+  queuePosition   Int?
+  progress        Int       @default(0)  // 0-100%
+  
+  // Notification preferences
+  notifyVia       String    // "telegram", "email", or "both"
+  notifyEmail     String?
+  notifyTelegram  String?
+  
+  // Results
+  resultId        Int?      // Link to BacktestResult when complete
+  errorMessage    String?
+  
+  // Timestamps
+  createdAt       DateTime  @default(now())
+  startedAt       DateTime?
+  completedAt     DateTime?
+  
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
 }

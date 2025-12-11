@@ -4,6 +4,7 @@ import { BacktestService } from './backtest.service';
 import { RunBacktestDto } from './dto/backtest.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 import { PrismaService } from '../../prisma/prisma.service';
+import { QueueService } from './queue.service';
 
 interface JwtUser {
   sub: string; // Supabase UUID
@@ -23,6 +24,7 @@ export class BacktestController {
   constructor(
     private readonly backtestService: BacktestService,
     private readonly prisma: PrismaService,
+    private readonly queueService: QueueService,
   ) {}
 
   // Resolve Supabase UUID to database user ID (with caching)
@@ -243,5 +245,75 @@ export class BacktestController {
   @Post('data/update')
   triggerDataUpdate() {
     return this.backtestService.triggerDataUpdate();
+  }
+
+  // ============ QUEUE ENDPOINTS ============
+
+  @UseGuards(JwtAuthGuard)
+  @Post('queue')
+  async addToQueue(
+    @Req() req: AuthenticatedRequest,
+    @Body() body: { payload: RunBacktestDto; notifyVia: 'telegram' | 'email' | 'both' },
+  ) {
+    const userId = await this.getUserId(req);
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true, telegramId: true },
+    });
+
+    if (!user) {
+      return { error: 'User not found' };
+    }
+
+    const result = await this.queueService.addToQueue(
+      userId,
+      body.payload.strategy_name || 'My Strategy',
+      body.payload,
+      body.notifyVia,
+      user.email,
+      user.telegramId || undefined,
+    );
+
+    return {
+      success: true,
+      message: 'Backtest added to queue',
+      ...result,
+    };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('queue/position/:queueId')
+  async getQueuePosition(@Param('queueId') queueId: string) {
+    const position = await this.queueService.getQueuePosition(parseInt(queueId));
+    return position || { error: 'Queue item not found' };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('queue/my')
+  async getMyQueue(@Req() req: AuthenticatedRequest) {
+    const userId = await this.getUserId(req);
+    return this.queueService.getUserQueueItems(userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('queue/stats')
+  async getQueueStats() {
+    const queued = await this.prisma.backtestQueue.count({
+      where: { status: 'queued' },
+    }) as number;
+    const processing = await this.prisma.backtestQueue.count({
+      where: { status: 'processing' },
+    }) as number;
+    const completed = await this.prisma.backtestQueue.count({
+      where: { status: 'completed' },
+    }) as number;
+
+    return {
+      queued,
+      processing,
+      completed,
+      totalInQueue: queued + processing,
+      estimatedWaitMinutes: queued * 15,
+    };
   }
 }

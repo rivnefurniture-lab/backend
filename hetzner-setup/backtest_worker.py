@@ -1,201 +1,295 @@
 #!/usr/bin/env python3
 """
-Backtest Worker with Job Queue
-Handles async backtest processing for scalability
+Algotcha Backtest Queue Worker
+Processes backtest jobs one at a time from the queue
 """
 import os
 import sys
-import json
 import time
-import redis
-import hashlib
-from datetime import datetime, timedelta
+import json
+import psycopg2
+import requests
+from datetime import datetime
 
-# Add scripts directory to path
+# Add script directory to path for imports
 sys.path.insert(0, '/opt/algotcha/scripts')
+import backtest2
 
-REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379')
-DATA_DIR = '/opt/algotcha/data'
-CACHE_TTL = 3600 * 24  # 24 hours cache
+# Configuration
+DATABASE_URL = os.getenv('DATABASE_URL', '')
+TELEGRAM_TOKEN = '8573074509:AAHDMYFF0WM6zSGkkhKHVNLTypxbw'
+GMAIL_USER = 'o.kytsuk@gmail.com'
+GMAIL_PASSWORD = 'hvxe tvqo zuhf rdqo'
 
-# Connect to Redis
-try:
-    r = redis.from_url(REDIS_URL)
-    r.ping()
-    print("✅ Redis connected")
-except:
-    r = None
-    print("⚠️ Redis not available, running without cache")
+# Set the data directory for backtest2
+backtest2.DATA_DIR = '/opt/algotcha/data/historical'
 
+def log(msg):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {msg}", flush=True)
 
-def get_cache_key(config: dict) -> str:
-    """Generate cache key from backtest config"""
-    # Normalize config for consistent hashing
-    normalized = json.dumps(config, sort_keys=True)
-    return f"backtest:{hashlib.sha256(normalized.encode()).hexdigest()[:16]}"
-
-
-def get_cached_result(config: dict) -> dict | None:
-    """Get cached backtest result if exists"""
-    if not r:
+def get_db_connection():
+    """Connect to PostgreSQL database"""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        return conn
+    except Exception as e:
+        log(f"❌ Database connection failed: {e}")
         return None
-    
-    key = get_cache_key(config)
-    cached = r.get(key)
-    if cached:
-        return json.loads(cached)
-    return None
 
-
-def cache_result(config: dict, result: dict, ttl: int = CACHE_TTL):
-    """Cache backtest result"""
-    if not r:
+def send_telegram(chat_id, message):
+    """Send Telegram notification"""
+    if not chat_id:
         return
     
-    key = get_cache_key(config)
-    r.setex(key, ttl, json.dumps(result))
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    try:
+        requests.post(url, json={
+            'chat_id': chat_id,
+            'text': message,
+            'parse_mode': 'Markdown'
+        }, timeout=10)
+    except Exception as e:
+        log(f"⚠️  Failed to send Telegram: {e}")
 
-
-def run_backtest(config: dict) -> dict:
-    """Run actual backtest using backtest2.py"""
-    import backtest2
+def send_email(to_email, subject, html_body):
+    """Send email notification using Gmail SMTP"""
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
     
-    backtest2.DATA_DIR = DATA_DIR
-    
-    # Build payload
-    payload = {
-        'strategy_name': config.get('strategy_name', 'API Backtest'),
-        'pairs': config.get('pairs', ['BTC/USDT']),
-        'max_active_deals': config.get('max_active_deals', 3),
-        'trading_fee': config.get('trading_fee', 0.001),
-        'base_order_size': config.get('base_order_size', 1000.0),
-        'initial_balance': config.get('initial_balance', 10000.0),
-        'start_date': config.get('start_date', '2024-01-01'),
-        'end_date': config.get('end_date', '2024-12-31'),
-        'entry_conditions': config.get('entry_conditions', []),
-        'exit_conditions': config.get('exit_conditions', []),
-        'conditions_active': True,
-        'price_change_active': False,
-        'target_profit': 0.0,
-        'stop_loss_toggle': False,
-        'stop_loss_value': 0.0,
-        'cooldown_between_deals': 0,
-        'safety_order_toggle': False,
-        'reinvest_profit': 0.0,
-        'risk_reduction': 0.0,
-        'min_daily_volume': 0.0
-    }
-    
-    result = backtest2.run_backtest(payload)
-    return result
-
-
-def process_job(job_id: str, config: dict) -> dict:
-    """Process a single backtest job"""
-    start_time = time.time()
-    
-    # Update job status
-    if r:
-        r.hset(f"job:{job_id}", "status", "running")
-        r.hset(f"job:{job_id}", "started_at", datetime.utcnow().isoformat())
+    if not to_email:
+        return
     
     try:
-        # Check cache first
-        cached = get_cached_result(config)
-        if cached:
-            result = {
-                'status': 'success',
-                'cached': True,
-                'metrics': cached.get('metrics', {}),
-                'runTime': time.time() - start_time
-            }
-        else:
-            # Run actual backtest
-            bt_result = run_backtest(config)
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = subject
+        msg['From'] = f'"Algotcha" <{GMAIL_USER}>'
+        msg['To'] = to_email
+        
+        html_part = MIMEText(html_body, 'html')
+        msg.attach(html_part)
+        
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(GMAIL_USER, GMAIL_PASSWORD)
+            server.send_message(msg)
             
-            if bt_result.get('status') == 'success':
-                metrics = bt_result.get('metrics', {})
-                result = {
-                    'status': 'success',
-                    'cached': False,
-                    'metrics': {
-                        'net_profit': round(metrics.get('net_profit', 0) * 100, 2),
-                        'net_profit_usd': metrics.get('net_profit_usd', '$0'),
-                        'total_profit': round(metrics.get('total_profit', 0) * 100, 2),
-                        'max_drawdown': round(metrics.get('max_drawdown', 0) * 100, 2),
-                        'sharpe_ratio': round(metrics.get('sharpe_ratio', 0), 2),
-                        'win_rate': round(metrics.get('win_rate', 0), 2),
-                        'total_trades': metrics.get('total_trades', 0),
-                        'profit_factor': metrics.get('profit_factor', 0),
-                    },
-                    'runTime': time.time() - start_time
-                }
-                # Cache the result
-                cache_result(config, result)
-            else:
-                result = {
-                    'status': 'error',
-                    'error': bt_result.get('message', 'Backtest failed'),
-                    'runTime': time.time() - start_time
-                }
-        
-        # Update job with result
-        if r:
-            r.hset(f"job:{job_id}", "status", "completed")
-            r.hset(f"job:{job_id}", "result", json.dumps(result))
-            r.hset(f"job:{job_id}", "completed_at", datetime.utcnow().isoformat())
-            r.expire(f"job:{job_id}", 3600)  # Keep job for 1 hour
-        
-        return result
-        
+        log(f"✅ Email sent to {to_email}")
     except Exception as e:
-        error_result = {
-            'status': 'error',
-            'error': str(e),
-            'runTime': time.time() - start_time
-        }
-        if r:
-            r.hset(f"job:{job_id}", "status", "failed")
-            r.hset(f"job:{job_id}", "error", str(e))
-        return error_result
+        log(f"⚠️  Failed to send email: {e}")
 
+def notify_user(notify_via, email, telegram_id, strategy_name, metrics, status, error=None):
+    """Send notification to user via their preferred method"""
+    
+    if status == 'completed':
+        # Telegram message
+        telegram_msg = f"""
+🎉 *Backtest Complete!*
 
-def worker_loop():
-    """Main worker loop - processes jobs from queue"""
-    if not r:
-        print("❌ Redis required for worker mode")
+📊 *Strategy:* {strategy_name}
+
+*Results:*
+💰 Net Profit: {metrics.get('net_profit_usd', 'N/A')}
+📈 Total Return: {metrics.get('net_profit', 0)*100:.2f}%
+📉 Max Drawdown: {metrics.get('max_drawdown', 0)*100:.2f}%
+🎯 Win Rate: {metrics.get('win_rate', 0)*100:.2f}%
+💼 Total Trades: {metrics.get('total_trades', 0)}
+🏆 Profit Factor: {metrics.get('profit_factor', 0):.2f}x
+
+✅ View results at algotcha.com
+        """.strip()
+        
+        # Email HTML
+        email_html = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 600px;">
+          <h2 style="color: #10b981;">🎉 Backtest Complete!</h2>
+          <div style="background: #f3f4f6; padding: 20px; border-radius: 8px;">
+            <h3>📊 Strategy: {strategy_name}</h3>
+            <table style="width: 100%;">
+              <tr><td><strong>💰 Net Profit:</strong></td><td>{metrics.get('net_profit_usd', 'N/A')}</td></tr>
+              <tr><td><strong>📈 Total Return:</strong></td><td>{metrics.get('net_profit', 0)*100:.2f}%</td></tr>
+              <tr><td><strong>📉 Max Drawdown:</strong></td><td>{metrics.get('max_drawdown', 0)*100:.2f}%</td></tr>
+              <tr><td><strong>🎯 Win Rate:</strong></td><td>{metrics.get('win_rate', 0)*100:.2f}%</td></tr>
+              <tr><td><strong>💼 Total Trades:</strong></td><td>{metrics.get('total_trades', 0)}</td></tr>
+              <tr><td><strong>🏆 Profit Factor:</strong></td><td>{metrics.get('profit_factor', 0):.2f}x</td></tr>
+            </table>
+          </div>
+          <p><a href="https://algotcha.com/backtest" style="display: inline-block; background: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px;">View Details</a></p>
+        </div>
+        """
+        email_subject = f"✅ Backtest Complete - {strategy_name}"
+    else:
+        telegram_msg = f"❌ *Backtest Failed*\n\n📊 *Strategy:* {strategy_name}\n*Error:* {error or 'Unknown error'}"
+        email_html = f"<h2>❌ Backtest Failed</h2><p>Strategy: {strategy_name}</p><p>Error: {error or 'Unknown error'}</p>"
+        email_subject = f"❌ Backtest Failed - {strategy_name}"
+    
+    # Send notifications
+    if notify_via in ['telegram', 'both'] and telegram_id:
+        send_telegram(telegram_id, telegram_msg)
+    
+    if notify_via in ['email', 'both'] and email:
+        send_email(email, email_subject, email_html)
+
+def process_backtest(queue_item, conn):
+    """Process a single backtest from the queue"""
+    queue_id = queue_item[0]
+    user_id = queue_item[1]
+    strategy_name = queue_item[2]
+    payload_json = queue_item[3]
+    notify_via = queue_item[4]
+    notify_email = queue_item[5]
+    notify_telegram = queue_item[6]
+    
+    log(f"🚀 Processing backtest #{queue_id}: {strategy_name}")
+    
+    # Update status to processing
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE "BacktestQueue" 
+        SET status = 'processing', "startedAt" = NOW(), progress = 0
+        WHERE id = %s
+    """, (queue_id,))
+    conn.commit()
+    
+    try:
+        # Parse payload
+        payload = json.loads(payload_json)
+        
+        # Run backtest
+        log(f"⏳ Running backtest for {len(payload.get('pairs', []))} pairs...")
+        start_time = time.time()
+        result = backtest2.run_backtest(payload)
+        elapsed = time.time() - start_time
+        
+        if result.get('status') == 'success':
+            metrics = result.get('metrics', {})
+            
+            log(f"✅ Backtest complete in {elapsed:.1f}s")
+            log(f"   Net Profit: {metrics.get('net_profit_usd', 'N/A')}")
+            log(f"   Win Rate: {metrics.get('win_rate', 0)*100:.2f}%")
+            log(f"   Total Trades: {metrics.get('total_trades', 0)}")
+            
+            # Save result to database
+            cursor.execute("""
+                INSERT INTO "BacktestResult" (
+                    name, config, pairs, "startDate", "endDate", "initialBalance",
+                    "netProfit", "netProfitUsd", "maxDrawdown", "sharpeRatio", 
+                    "sortinoRatio", "winRate", "totalTrades", "profitFactor", 
+                    "yearlyReturn", "chartData", "createdAt", "userId"
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+                RETURNING id
+            """, (
+                strategy_name,
+                json.dumps(payload),
+                json.dumps(payload.get('pairs', [])),
+                payload.get('start_date'),
+                payload.get('end_date'),
+                payload.get('initial_balance', 10000),
+                metrics.get('net_profit', 0),
+                float(metrics.get('net_profit_usd', '$0').replace('$', '').replace(',', '')),
+                metrics.get('max_drawdown', 0),
+                metrics.get('sharpe_ratio', 0),
+                metrics.get('sortino_ratio', 0),
+                metrics.get('win_rate', 0),
+                metrics.get('total_trades', 0),
+                metrics.get('profit_factor', 0),
+                metrics.get('yearly_return', 0),
+                json.dumps(result.get('chartData', {})),
+                user_id
+            ))
+            
+            result_id = cursor.fetchone()[0]
+            
+            # Update queue item to completed
+            cursor.execute("""
+                UPDATE "BacktestQueue" 
+                SET status = 'completed', "completedAt" = NOW(), progress = 100, "resultId" = %s
+                WHERE id = %s
+            """, (result_id, queue_id))
+            conn.commit()
+            
+            # Send notification
+            notify_user(notify_via, notify_email, notify_telegram, strategy_name, metrics, 'completed')
+            
+            return True
+        else:
+            error_msg = result.get('message', 'Unknown error')
+            log(f"❌ Backtest failed: {error_msg}")
+            
+            cursor.execute("""
+                UPDATE "BacktestQueue" 
+                SET status = 'failed', "completedAt" = NOW(), "errorMessage" = %s
+                WHERE id = %s
+            """, (error_msg, queue_id))
+            conn.commit()
+            
+            notify_user(notify_via, notify_email, notify_telegram, strategy_name, {}, 'failed', error_msg)
+            
+            return False
+            
+    except Exception as e:
+        error_msg = str(e)
+        log(f"❌ Exception: {error_msg}")
+        
+        cursor.execute("""
+            UPDATE "BacktestQueue" 
+            SET status = 'failed', "completedAt" = NOW(), "errorMessage" = %s
+            WHERE id = %s
+        """, (error_msg, queue_id))
+        conn.commit()
+        
+        notify_user(notify_via, notify_email, notify_telegram, strategy_name, {}, 'failed', error_msg)
+        
+        return False
+
+def main():
+    """Main worker loop"""
+    log("="*80)
+    log("🤖 Algotcha Backtest Queue Worker Starting")
+    log("="*80)
+    
+    conn = get_db_connection()
+    if not conn:
+        log("❌ Cannot start without database connection")
         return
     
-    print("🔄 Worker started, waiting for jobs...")
+    log("✅ Connected to database")
+    log("⏳ Waiting for backtest jobs...")
     
     while True:
         try:
-            # Block until a job is available
-            job_data = r.brpop('backtest_queue', timeout=30)
+            cursor = conn.cursor()
             
-            if job_data:
-                _, job_json = job_data
-                job = json.loads(job_json)
-                job_id = job.get('job_id')
-                config = job.get('config', {})
+            # Get next queued item
+            cursor.execute("""
+                SELECT id, "userId", "strategyName", payload, "notifyVia", 
+                       "notifyEmail", "notifyTelegram"
+                FROM "BacktestQueue"
+                WHERE status = 'queued'
+                ORDER BY "createdAt" ASC
+                LIMIT 1
+            """)
+            
+            queue_item = cursor.fetchone()
+            
+            if queue_item:
+                process_backtest(queue_item, conn)
+            else:
+                # No items in queue, wait a bit
+                time.sleep(10)
                 
-                print(f"📊 Processing job {job_id}")
-                result = process_job(job_id, config)
-                print(f"✅ Job {job_id} completed: {result.get('status')}")
-            
+        except KeyboardInterrupt:
+            log("\n🛑 Worker stopped by user")
+            break
         except Exception as e:
-            print(f"❌ Worker error: {e}")
-            time.sleep(5)
-
+            log(f"❌ Worker error: {e}")
+            time.sleep(30)
+    
+    if conn:
+        conn.close()
+    
+    log("👋 Worker shutting down")
 
 if __name__ == '__main__':
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--worker', action='store_true', help='Run as background worker')
-    args = parser.parse_args()
-    
-    if args.worker:
-        worker_loop()
-    else:
-        print("Use --worker to start the worker process")
-
+    main()

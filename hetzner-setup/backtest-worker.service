@@ -1,0 +1,19 @@
+[Unit]
+Description=Algotcha Backtest Queue Worker
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/algotcha/scripts
+Environment="DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/DATABASE"
+Environment="TELEGRAM_BOT_TOKEN=8573074509:AAHDMYFF0WM6zSGkkhKHVNLTypxbw"
+ExecStart=/usr/bin/python3 /opt/algotcha/scripts/backtest_worker.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/opt/algotcha/logs/backtest_worker.log
+StandardError=append:/opt/algotcha/logs/backtest_worker.log
+
+[Install]
+WantedBy=multi-user.target
+
