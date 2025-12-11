@@ -316,4 +316,14 @@ export class BacktestController {
       estimatedWaitMinutes: queued * 15,
     };
   }
+
+  // Admin endpoint - get all queue items
+  @UseGuards(JwtAuthGuard)
+  @Get('../admin/queue/all')
+  async getAllQueueItems() {
+    return this.prisma.backtestQueue.findMany({
+      orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
+      take: 100,
+    });
+  }
 }
