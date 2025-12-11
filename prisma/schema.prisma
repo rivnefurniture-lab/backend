@@ -202,6 +202,7 @@ model RefundRequest {
   processedAt DateTime?
 }
 
+// Backtest queue for managing sequential backtest execution
 model BacktestQueue {
   id              Int       @id @default(autoincrement())
   userId          Int
