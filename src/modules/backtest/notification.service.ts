@@ -9,7 +9,7 @@ export class NotificationService {
   constructor() {
     // Setup email transporter with Gmail
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-    this.emailTransporter = nodemailer.createTransporter({
+    this.emailTransporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
         user: 'o.kytsuk@gmail.com',
@@ -21,7 +21,7 @@ export class NotificationService {
   async sendTelegramNotification(
     telegramId: string,
     strategyName: string,
-    metrics: Record<string, unknown>,
+    metrics: any,
     status: 'completed' | 'failed',
     error?: string,
   ) {
@@ -38,13 +38,13 @@ export class NotificationService {
 📊 *Strategy:* ${strategyName}
 
 *Results:*
-💰 Net Profit: ${metrics.net_profit_usd}
-📈 Total Return: ${metrics.net_profit?.toFixed(2)}%
-📉 Max Drawdown: ${metrics.max_drawdown?.toFixed(2)}%
-🎯 Win Rate: ${(metrics.win_rate * 100)?.toFixed(2)}%
-💼 Total Trades: ${metrics.total_trades}
-🏆 Profit Factor: ${metrics.profit_factor?.toFixed(2)}x
-📊 Sharpe Ratio: ${metrics.sharpe_ratio?.toFixed(2)}
+💰 Net Profit: ${metrics.net_profit_usd || 'N/A'}
+📈 Total Return: ${(metrics.net_profit * 100 || 0).toFixed(2)}%
+📉 Max Drawdown: ${(metrics.max_drawdown * 100 || 0).toFixed(2)}%
+🎯 Win Rate: ${(metrics.win_rate * 100 || 0).toFixed(2)}%
+💼 Total Trades: ${metrics.total_trades || 0}
+🏆 Profit Factor: ${(metrics.profit_factor || 0).toFixed(2)}x
+📊 Sharpe Ratio: ${(metrics.sharpe_ratio || 0).toFixed(2)}
 
 ✅ View detailed results in your Algotcha dashboard!
       `.trim();
@@ -84,7 +84,7 @@ Please try again or contact support if the issue persists.
   async sendEmailNotification(
     email: string,
     strategyName: string,
-    metrics: Record<string, unknown>,
+    metrics: any,
     status: 'completed' | 'failed',
     error?: string,
   ) {
@@ -107,31 +107,31 @@ Please try again or contact support if the issue persists.
             <table style="width: 100%; border-collapse: collapse;">
               <tr>
                 <td style="padding: 8px 0;"><strong>💰 Net Profit:</strong></td>
-                <td style="text-align: right;">${metrics.net_profit_usd}</td>
+                <td style="text-align: right;">${metrics.net_profit_usd || 'N/A'}</td>
               </tr>
               <tr>
                 <td style="padding: 8px 0;"><strong>📈 Total Return:</strong></td>
-                <td style="text-align: right;">${metrics.net_profit?.toFixed(2)}%</td>
+                <td style="text-align: right;">${(metrics.net_profit * 100 || 0).toFixed(2)}%</td>
               </tr>
               <tr>
                 <td style="padding: 8px 0;"><strong>📉 Max Drawdown:</strong></td>
-                <td style="text-align: right;">${metrics.max_drawdown?.toFixed(2)}%</td>
+                <td style="text-align: right;">${(metrics.max_drawdown * 100 || 0).toFixed(2)}%</td>
               </tr>
               <tr>
                 <td style="padding: 8px 0;"><strong>🎯 Win Rate:</strong></td>
-                <td style="text-align: right;">${(metrics.win_rate * 100)?.toFixed(2)}%</td>
+                <td style="text-align: right;">${(metrics.win_rate * 100 || 0).toFixed(2)}%</td>
               </tr>
               <tr>
                 <td style="padding: 8px 0;"><strong>💼 Total Trades:</strong></td>
-                <td style="text-align: right;">${metrics.total_trades}</td>
+                <td style="text-align: right;">${metrics.total_trades || 0}</td>
               </tr>
               <tr>
                 <td style="padding: 8px 0;"><strong>🏆 Profit Factor:</strong></td>
-                <td style="text-align: right;">${metrics.profit_factor?.toFixed(2)}x</td>
+                <td style="text-align: right;">${(metrics.profit_factor || 0).toFixed(2)}x</td>
               </tr>
               <tr>
                 <td style="padding: 8px 0;"><strong>📊 Sharpe Ratio:</strong></td>
-                <td style="text-align: right;">${metrics.sharpe_ratio?.toFixed(2)}</td>
+                <td style="text-align: right;">${(metrics.sharpe_ratio || 0).toFixed(2)}</td>
               </tr>
             </table>
           </div>
@@ -178,7 +178,7 @@ Please try again or contact support if the issue persists.
     email: string,
     telegramId: string | null,
     strategyName: string,
-    metrics: Record<string, unknown>,
+    metrics: any,
     status: 'completed' | 'failed',
     error?: string,
   ) {
