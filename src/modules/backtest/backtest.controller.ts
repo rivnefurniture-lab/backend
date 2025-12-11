@@ -319,9 +319,9 @@ export class BacktestController {
 
   // Admin endpoint - get all queue items
   @UseGuards(JwtAuthGuard)
-  @Get('../admin/queue/all')
+  @Get('queue/all')
   async getAllQueueItems() {
-    return this.prisma.backtestQueue.findMany({
+    return await this.prisma.backtestQueue.findMany({
       orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
       take: 100,
     });
