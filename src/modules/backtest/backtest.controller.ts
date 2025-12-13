@@ -15,6 +15,8 @@ import { RunBacktestDto } from './dto/backtest.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 import { PrismaService } from '../../prisma/prisma.service';
 import { QueueService } from './queue.service';
+import * as fs from 'fs';
+import * as path from 'path';
 
 interface JwtUser {
   sub: string; // Supabase UUID
@@ -92,6 +94,16 @@ export class BacktestController {
   @Get('strategies')
   async getAllStrategies() {
     try {
+      // Load all trades from JSON file
+      let allTrades = [];
+      try {
+        const tradesPath = path.join(process.cwd(), 'data', 'real_strategy_trades.json');
+        const tradesData = fs.readFileSync(tradesPath, 'utf-8');
+        allTrades = JSON.parse(tradesData);
+      } catch (e) {
+        console.log('Could not load trades file, using sample trades');
+      }
+
       // Real backtest data from 2023-2025 with actual trades and yearly breakdown
       const realBacktest = {
         id: 'real-rsi-ma-bb-2023-2025',
@@ -328,7 +340,9 @@ export class BacktestController {
             comment: 'Bollinger Bands exit signal',
           },
         ],
-        totalBacktestTrades: 101,
+        // Use all trades if available, otherwise use samples
+        ...(allTrades.length > 0 ? { recentTrades: allTrades } : {}),
+        totalBacktestTrades: allTrades.length > 0 ? allTrades.length : 101,
       };
 
       let userStrategies: any[] = [];
