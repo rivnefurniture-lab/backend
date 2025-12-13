@@ -78,6 +78,23 @@ def send_email(to_email, subject, html_body):
     except Exception as e:
         log(f"⚠️  Failed to send email: {e}")
 
+def convert_numpy_types(obj):
+    """Convert numpy types to native Python types for JSON/PostgreSQL compatibility"""
+    import numpy as np
+    
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: convert_numpy_types(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    else:
+        return obj
+
 def notify_user(notify_via, email, telegram_id, strategy_name, metrics, status, error=None):
     """Send notification to user via their preferred method"""
     
@@ -164,6 +181,10 @@ def process_backtest(queue_item, conn):
         if result.get('status') == 'success':
             metrics = result.get('metrics', {})
             
+            # Convert all numpy types to native Python types
+            metrics = convert_numpy_types(metrics)
+            result_converted = convert_numpy_types(result)
+            
             log(f"✅ Backtest complete in {elapsed:.1f}s")
             log(f"   Net Profit: {metrics.get('net_profit_usd', 'N/A')}")
             log(f"   Win Rate: {metrics.get('win_rate', 0)*100:.2f}%")
@@ -186,16 +207,16 @@ def process_backtest(queue_item, conn):
                 payload.get('start_date'),
                 payload.get('end_date'),
                 payload.get('initial_balance', 10000),
-                metrics.get('net_profit', 0),
+                float(metrics.get('net_profit', 0)),
                 float(metrics.get('net_profit_usd', '$0').replace('$', '').replace(',', '')),
-                metrics.get('max_drawdown', 0),
-                metrics.get('sharpe_ratio', 0),
-                metrics.get('sortino_ratio', 0),
-                metrics.get('win_rate', 0),
-                metrics.get('total_trades', 0),
-                metrics.get('profit_factor', 0),
-                metrics.get('yearly_return', 0),
-                json.dumps(result.get('chartData', {})),
+                float(metrics.get('max_drawdown', 0)),
+                float(metrics.get('sharpe_ratio', 0)),
+                float(metrics.get('sortino_ratio', 0)),
+                float(metrics.get('win_rate', 0)),
+                int(metrics.get('total_trades', 0)),
+                float(metrics.get('profit_factor', 0)),
+                float(metrics.get('yearly_return', 0)),
+                json.dumps(result_converted.get('chartData', {})),
                 user_id
             ))
             
