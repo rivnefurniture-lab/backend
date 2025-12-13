@@ -1651,8 +1651,7 @@ print(json.dumps(result))
 
   /**
    * Rerun a strategy backtest with custom parameters
-   * Uses the strategy's original configuration (entry/exit conditions)
-   * but allows custom date range, capital, and pairs
+   * Uses Contabo server with backtest2.py for accurate results
    */
   async rerunBacktestWithConfig(
     strategyId: string,
@@ -1663,79 +1662,95 @@ print(json.dumps(result))
       pairs?: string[];
     },
   ): Promise<any> {
-    // Map of strategy IDs to their configurations
-    const strategyConfigs: Record<string, any> = {
-      'real-rsi-ma-bb-2023-2025': {
-        strategy_name: 'RSI_MA_BB_Rerun',
-        entry_conditions: [
-          {
-            indicator: 'RSI',
-            subfields: {
-              Timeframe: '1h',
-              'RSI Length': 21,
-              'Signal Value': 20,
-              Condition: 'Less Than',
-            },
+    // Strategy configuration for RSI MA BB strategy
+    const strategyConfig = {
+      strategy_name: 'RSI_MA_BB_Rerun',
+      entry_conditions: [
+        {
+          indicator: 'RSI',
+          subfields: {
+            Timeframe: '1h',
+            'RSI Length': 21,
+            'Signal Value': 20,
+            Condition: 'Less Than',
           },
-          {
-            indicator: 'MA',
-            subfields: {
-              Timeframe: '1h',
-              'MA Type': 'EMA',
-              'Fast MA': 20,
-              'Slow MA': 100,
-              Condition: 'Less Than',
-            },
+        },
+        {
+          indicator: 'MA',
+          subfields: {
+            Timeframe: '1h',
+            'MA Type': 'EMA',
+            'Fast MA': 20,
+            'Slow MA': 100,
+            Condition: 'Less Than',
           },
-        ],
-        exit_conditions: [
-          {
-            indicator: 'BollingerBands',
-            subfields: {
-              Timeframe: '1d',
-              'BB% Period': 50,
-              Deviation: 1,
-              Condition: 'Greater Than',
-              'Signal Value': 0.1,
-            },
+        },
+      ],
+      exit_conditions: [
+        {
+          indicator: 'BollingerBands',
+          subfields: {
+            Timeframe: '1d',
+            'BB% Period': 50,
+            Deviation: 1,
+            Condition: 'Greater Than',
+            'Signal Value': 0.1,
           },
-        ],
-        max_active_deals: 5,
-        trading_fee: 0.1,
-        base_order_size: 1000,
-        safety_order_toggle: false,
-        price_change_active: false,
-        conditions_active: true,
-        reinvest_profit: 100,
-      },
-      // Can add more strategy configs here
+        },
+      ],
+      max_active_deals: 5,
+      trading_fee: 0.1,
+      base_order_size: 1000,
+      safety_order_toggle: false,
+      price_change_active: false,
+      conditions_active: true,
+      reinvest_profit: 100,
     };
 
-    // Get the strategy configuration or use default
-    const strategyConfig =
-      strategyConfigs[strategyId] || strategyConfigs['real-rsi-ma-bb-2023-2025'];
-
-    // Build the backtest payload
-    const payload: RunBacktestDto = {
+    // Build the payload for Contabo backtest2.py
+    const payload = {
       ...strategyConfig,
-      // Override with user's custom parameters
       initial_balance: config.initialCapital || 5000,
       start_date: config.startDate || '2023-01-01',
       end_date: config.endDate || '2025-12-10',
-      pairs: config.pairs || [
-        'BTC/USDT',
-        'ETH/USDT',
-        'ADA/USDT',
-        'SOL/USDT',
-        'AVAX/USDT',
-      ],
+      pairs: config.pairs || ['BTC/USDT', 'ETH/USDT'],
     };
 
     this.logger.log(
-      `Rerunning backtest for ${strategyId} with custom config: ${config.startDate} to ${config.endDate}, ${config.pairs?.length || 0} pairs`,
+      `Rerunning backtest via Contabo: ${config.startDate} to ${config.endDate}, ${config.pairs?.length || 0} pairs`,
     );
 
-    // Run the backtest using the same logic as the original
-    return this.runBacktest(payload);
+    // Call Contabo server directly
+    const contaboUrl = process.env.DATA_SERVER_URL || 'http://144.91.86.94:5000';
+    
+    try {
+      const response = await fetch(`${contaboUrl}/backtest/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(300000), // 5 minute timeout
+      });
+
+      if (!response.ok) {
+        throw new Error(`Contabo server returned ${response.status}`);
+      }
+
+      const result = await response.json();
+      
+      if (result.status === 'error') {
+        return {
+          status: 'error',
+          message: result.message || 'Backtest failed',
+        };
+      }
+
+      return result;
+    } catch (e: any) {
+      this.logger.error(`Contabo backtest failed: ${e.message}`);
+      return {
+        status: 'error',
+        message: `Backtest failed: ${e.message}. Please try again or use the queue system for complex backtests.`,
+      };
+    }
   }
 }
