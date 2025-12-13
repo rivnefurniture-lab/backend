@@ -15,7 +15,6 @@ import { RunBacktestDto } from './dto/backtest.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 import { PrismaService } from '../../prisma/prisma.service';
 import { QueueService } from './queue.service';
-import { REAL_STRATEGY_TRADES } from './data/real-strategy-trades';
 
 interface JwtUser {
   sub: string; // Supabase UUID
@@ -329,9 +328,7 @@ export class BacktestController {
             comment: 'Bollinger Bands exit signal',
           },
         ],
-        // All 206 trades from the actual backtest
-        recentTrades: REAL_STRATEGY_TRADES,
-        totalBacktestTrades: REAL_STRATEGY_TRADES.length,
+        totalBacktestTrades: 206, // Total from CSV (206 BUY/SELL entries)
       };
 
       let userStrategies: any[] = [];
