@@ -307,18 +307,38 @@ export class StrategyService {
     config: StrategyConfig,
     exchange: any,
   ) {
-    // Fetch current market data - use 1h timeframe by default
-    const timeframe = config.timeframe || '1h';
-    const ohlcv = await exchange.fetchOHLCV(symbol, timeframe, undefined, 200);
-    if (!ohlcv || ohlcv.length < 50) return;
+    // Use live data from Contabo server (same indicators as backtest)
+    // Fallback to exchange API if server unavailable
+    let indicators: any;
+    let currentPrice: number;
 
-    const closes = ohlcv.map((c: any[]) => c[4]);
-    const highs = ohlcv.map((c: any[]) => c[2]);
-    const lows = ohlcv.map((c: any[]) => c[3]);
-    const currentPrice = closes[closes.length - 1];
+    try {
+      // Try to get pre-calculated indicators from Contabo
+      const response = await fetch(
+        `http://144.91.86.94:5555/data/${symbol.replace('/', '_')}_live.parquet`,
+      );
+      if (response.ok) {
+        const data = await response.json();
+        indicators = data.indicators;
+        currentPrice = data.close;
+        this.logger.log(`Using live data for ${symbol}: RSI=${indicators.rsi_14?.toFixed(1)}`);
+      } else {
+        throw new Error('Live data unavailable');
+      }
+    } catch {
+      // Fallback: Calculate from exchange data
+      const timeframe = config.timeframe || '1h';
+      const ohlcv = await exchange.fetchOHLCV(symbol, timeframe, undefined, 200);
+      if (!ohlcv || ohlcv.length < 50) return;
 
-    // Calculate all indicators needed for conditions
-    const indicators = this.calculateAllIndicators(closes, highs, lows);
+      const closes = ohlcv.map((c: any[]) => c[4]);
+      const highs = ohlcv.map((c: any[]) => c[2]);
+      const lows = ohlcv.map((c: any[]) => c[3]);
+      currentPrice = closes[closes.length - 1];
+      indicators = this.calculateAllIndicators(closes, highs, lows);
+      this.logger.log(`Using exchange data for ${symbol} (fallback)`);
+    }
+
     indicators.price = currentPrice;
 
     // Check if we have an open position
