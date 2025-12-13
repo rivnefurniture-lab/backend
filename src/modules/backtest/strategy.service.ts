@@ -15,6 +15,8 @@ interface StrategyConfig {
   bullish_exit_conditions?: any[];
   bearish_exit_conditions?: any[];
   useMarketState?: boolean;
+  timeframe?: string;
+  realTrading?: boolean;
 }
 
 @Injectable()
@@ -305,16 +307,19 @@ export class StrategyService {
     config: StrategyConfig,
     exchange: any,
   ) {
-    // Fetch current market data
-    const ohlcv = await exchange.fetchOHLCV(symbol, '1h', undefined, 100);
-    if (!ohlcv || ohlcv.length < 20) return;
+    // Fetch current market data - use 1h timeframe by default
+    const timeframe = config.timeframe || '1h';
+    const ohlcv = await exchange.fetchOHLCV(symbol, timeframe, undefined, 200);
+    if (!ohlcv || ohlcv.length < 50) return;
 
     const closes = ohlcv.map((c: any[]) => c[4]);
+    const highs = ohlcv.map((c: any[]) => c[2]);
+    const lows = ohlcv.map((c: any[]) => c[3]);
     const currentPrice = closes[closes.length - 1];
 
-    // Calculate indicators
-    const rsi = this.calculateRSI(closes, 14);
-    const currentRSI = rsi[rsi.length - 1];
+    // Calculate all indicators needed for conditions
+    const indicators = this.calculateAllIndicators(closes, highs, lows);
+    indicators.price = currentPrice;
 
     // Check if we have an open position
     const openTrade = await this.prisma.trade.findFirst({
@@ -326,46 +331,126 @@ export class StrategyService {
       },
     });
 
-    // Check entry conditions
+    // Check entry conditions (ALL must be true)
     if (
       !openTrade &&
-      this.checkConditions(config.entry_conditions || [], {
-        rsi: currentRSI,
-        price: currentPrice,
-      })
+      this.checkConditions(config.entry_conditions || [], indicators)
     ) {
-      await this.executeTrade(run, symbol, 'buy', currentPrice, exchange);
+      await this.executeTrade(run, symbol, 'buy', currentPrice, exchange, config.realTrading);
     }
 
-    // Check exit conditions
+    // Check exit conditions (ALL must be true)
     if (
       openTrade &&
-      this.checkConditions(config.exit_conditions || [], {
-        rsi: currentRSI,
-        price: currentPrice,
-      })
+      this.checkConditions(config.exit_conditions || [], indicators)
     ) {
-      await this.closeTrade(run, openTrade, currentPrice, exchange);
+      await this.closeTrade(run, openTrade, currentPrice, exchange, config.realTrading);
     }
   }
 
-  private checkConditions(
-    conditions: any[],
-    indicators: { rsi: number; price: number },
-  ): boolean {
+  private calculateAllIndicators(closes: number[], highs: number[], lows: number[]) {
+    const indicators: any = {};
+    
+    // RSI for different periods
+    indicators.rsi_7 = this.calculateRSI(closes, 7).slice(-1)[0];
+    indicators.rsi_14 = this.calculateRSI(closes, 14).slice(-1)[0];
+    indicators.rsi_21 = this.calculateRSI(closes, 21).slice(-1)[0];
+    indicators.rsi = indicators.rsi_14; // Default
+    
+    // EMA for different periods
+    indicators.ema_9 = this.calculateEMA(closes, 9).slice(-1)[0];
+    indicators.ema_20 = this.calculateEMA(closes, 20).slice(-1)[0];
+    indicators.ema_50 = this.calculateEMA(closes, 50).slice(-1)[0];
+    indicators.ema_100 = this.calculateEMA(closes, 100).slice(-1)[0];
+    indicators.ema_200 = this.calculateEMA(closes, 200).slice(-1)[0];
+    
+    // SMA
+    indicators.sma_20 = this.calculateSMA(closes, 20);
+    indicators.sma_50 = this.calculateSMA(closes, 50);
+    indicators.sma_100 = this.calculateSMA(closes, 100);
+    
+    // Bollinger Bands
+    const bb20 = this.calculateBollingerBands(closes, 20, 2);
+    indicators.bb_upper_20 = bb20.upper;
+    indicators.bb_lower_20 = bb20.lower;
+    indicators.bb_pct_20 = bb20.pctB;
+    
+    const bb50 = this.calculateBollingerBands(closes, 50, 1);
+    indicators.bb_pct_50 = bb50.pctB;
+    
+    return indicators;
+  }
+
+  private checkConditions(conditions: any[], indicators: any): boolean {
     if (!conditions || conditions.length === 0) return false;
 
+    // ALL conditions must be true
     for (const cond of conditions) {
-      if (cond.indicator === 'RSI') {
-        const value = cond.subfields?.['Signal Value'];
-        const condition = cond.subfields?.Condition;
+      const indicator = cond.indicator;
+      const subfields = cond.subfields || {};
+      const condition = subfields.Condition;
+      
+      let indicatorValue: number;
+      let targetValue: number;
 
-        if (condition === 'Less Than' && indicators.rsi >= value) return false;
-        if (condition === 'Greater Than' && indicators.rsi <= value)
-          return false;
+      if (indicator === 'RSI') {
+        const period = subfields['RSI Length'] || 14;
+        indicatorValue = indicators[`rsi_${period}`] || indicators.rsi;
+        targetValue = subfields['Signal Value'] || 30;
+      } else if (indicator === 'MA') {
+        const maType = subfields['MA Type'] || 'EMA';
+        const fastPeriod = subfields['Fast MA'] || 20;
+        const slowPeriod = subfields['Slow MA'] || 100;
+        const fastKey = `${maType.toLowerCase()}_${fastPeriod}`;
+        const slowKey = `${maType.toLowerCase()}_${slowPeriod}`;
+        indicatorValue = indicators[fastKey] || 0;
+        targetValue = indicators[slowKey] || 0;
+      } else if (indicator === 'BollingerBands') {
+        const period = subfields['BB% Period'] || 20;
+        indicatorValue = indicators[`bb_pct_${period}`] || indicators.bb_pct_20;
+        targetValue = subfields['Signal Value'] || 0.1;
+      } else {
+        continue; // Unknown indicator, skip
+      }
+
+      // Check condition
+      if (condition === 'Less Than' && indicatorValue >= targetValue) return false;
+      if (condition === 'Greater Than' && indicatorValue <= targetValue) return false;
+      if (condition === 'Crossing Up') {
+        // Would need previous value - simplified check
+        if (indicatorValue <= targetValue) return false;
+      }
+      if (condition === 'Crossing Down') {
+        if (indicatorValue >= targetValue) return false;
       }
     }
     return true;
+  }
+
+  private calculateEMA(closes: number[], period: number): number[] {
+    const k = 2 / (period + 1);
+    const ema: number[] = [closes[0]];
+    for (let i = 1; i < closes.length; i++) {
+      ema.push(closes[i] * k + ema[i - 1] * (1 - k));
+    }
+    return ema;
+  }
+
+  private calculateSMA(closes: number[], period: number): number {
+    const slice = closes.slice(-period);
+    return slice.reduce((a, b) => a + b, 0) / slice.length;
+  }
+
+  private calculateBollingerBands(closes: number[], period: number, dev: number) {
+    const slice = closes.slice(-period);
+    const sma = slice.reduce((a, b) => a + b, 0) / slice.length;
+    const variance = slice.reduce((sum, val) => sum + Math.pow(val - sma, 2), 0) / slice.length;
+    const std = Math.sqrt(variance);
+    const upper = sma + dev * std;
+    const lower = sma - dev * std;
+    const currentPrice = closes[closes.length - 1];
+    const pctB = (currentPrice - lower) / (upper - lower);
+    return { upper, lower, sma, pctB };
   }
 
   private async executeTrade(
@@ -374,12 +459,24 @@ export class StrategyService {
     side: 'buy' | 'sell',
     price: number,
     exchange: any,
+    realTrading: boolean = false,
   ) {
     const quantity = (run.initialBalance * 0.1) / price; // 10% position size
 
     try {
-      // Create order on exchange (paper trading for now)
-      // const order = await exchange.createOrder(symbol, 'market', side, quantity);
+      let orderId = null;
+      let actualPrice = price;
+
+      // REAL TRADING - execute on exchange
+      if (realTrading) {
+        this.logger.log(`🔴 REAL TRADE: ${side.toUpperCase()} ${quantity.toFixed(6)} ${symbol} @ market`);
+        const order = await exchange.createOrder(symbol, 'market', side, quantity);
+        orderId = order.id;
+        actualPrice = order.average || order.price || price;
+        this.logger.log(`✅ Order filled: ${orderId} at ${actualPrice}`);
+      } else {
+        this.logger.log(`📝 PAPER TRADE: ${side.toUpperCase()} ${quantity.toFixed(6)} ${symbol} @ ${price}`);
+      }
 
       const trade = await this.prisma.trade.create({
         data: {
@@ -387,11 +484,11 @@ export class StrategyService {
           side,
           type: 'market',
           quantity,
-          price,
-          amount: quantity * price,
+          price: actualPrice,
+          amount: quantity * actualPrice,
           status: 'filled',
-          entryPrice: price,
-          comment: 'Strategy signal',
+          entryPrice: actualPrice,
+          comment: realTrading ? `Real order: ${orderId}` : 'Paper trade',
           executedAt: new Date(),
           userId: run.userId,
           strategyRunId: run.id,
@@ -406,7 +503,7 @@ export class StrategyService {
         },
       });
 
-      this.logger.log(`Executed ${side} on ${symbol} at ${price}`);
+      this.logger.log(`Executed ${side} on ${symbol} at ${actualPrice}`);
       return trade;
     } catch (error) {
       this.logger.error(`Failed to execute trade: ${error.message}`);
@@ -419,15 +516,33 @@ export class StrategyService {
     trade: any,
     exitPrice: number,
     exchange: any,
+    realTrading: boolean = false,
   ) {
-    const profitLoss = (exitPrice - trade.entryPrice) * trade.quantity;
+    let actualExitPrice = exitPrice;
+
+    // REAL TRADING - sell on exchange
+    if (realTrading) {
+      try {
+        this.logger.log(`🔴 REAL CLOSE: SELL ${trade.quantity} ${trade.symbol} @ market`);
+        const order = await exchange.createOrder(trade.symbol, 'market', 'sell', trade.quantity);
+        actualExitPrice = order.average || order.price || exitPrice;
+        this.logger.log(`✅ Sell order filled at ${actualExitPrice}`);
+      } catch (error) {
+        this.logger.error(`Failed to close position: ${error.message}`);
+        throw error;
+      }
+    } else {
+      this.logger.log(`📝 PAPER CLOSE: SELL ${trade.quantity} ${trade.symbol} @ ${exitPrice}`);
+    }
+
+    const profitLoss = (actualExitPrice - trade.entryPrice) * trade.quantity;
     const profitPercent =
-      ((exitPrice - trade.entryPrice) / trade.entryPrice) * 100;
+      ((actualExitPrice - trade.entryPrice) / trade.entryPrice) * 100;
 
     await this.prisma.trade.update({
       where: { id: trade.id },
       data: {
-        exitPrice,
+        exitPrice: actualExitPrice,
         profitLoss,
         profitPercent,
         status: 'closed',
@@ -446,7 +561,7 @@ export class StrategyService {
     });
 
     this.logger.log(
-      `Closed trade on ${trade.symbol}: ${profitPercent.toFixed(2)}%`,
+      `Closed trade on ${trade.symbol}: ${profitPercent.toFixed(2)}% ($${profitLoss.toFixed(2)})`,
     );
   }
 
