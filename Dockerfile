@@ -31,6 +31,7 @@ COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/static ./static
 COPY --from=builder /app/scripts ./scripts
+COPY --from=builder /app/data ./data
 
 RUN chown -R nestjs:nodejs /app
 
