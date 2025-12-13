@@ -81,6 +81,46 @@ export class BacktestController {
   @Get('strategies')
   async getAllStrategies() {
     try {
+      // Real backtest data from 2023-2025
+      const realBacktest = {
+        id: 'real-rsi-ma-bb-2023-2025',
+        name: 'RSI & Moving Average with Bollinger Bands Exit',
+        description: 'Conservative strategy entering on RSI oversold with EMA confirmation, exiting on Bollinger Bands signals. Tested on 17 pairs over 3 years.',
+        category: 'Trend Following',
+        cagr: 53, // Yearly return
+        sharpe: 1.13,
+        sortino: 1.22,
+        winRate: 78,
+        maxDD: 20,
+        totalTrades: 101,
+        profitFactor: 7.80,
+        netProfitUsd: 12261.76,
+        avgDealDuration: '9 days, 7 hours',
+        returns: {
+          daily: 0.15,
+          weekly: 1.02,
+          monthly: 4.42,
+          yearly: 53
+        },
+        pairs: ['BTC/USDT', 'ETH/USDT', 'ADA/USDT', 'SOL/USDT', 'AVAX/USDT', 'DOT/USDT', 'LINK/USDT', 'ATOM/USDT', 'NEAR/USDT', 'LTC/USDT', 'XRP/USDT', 'DOGE/USDT', 'TRX/USDT', 'HBAR/USDT', 'SUI/USDT', 'BCH/USDT', 'RENDER/USDT'],
+        tags: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
+        updatedAt: new Date('2025-12-10'),
+        history: [
+          { year: '2023', value: 5075 },
+          { year: '2023', value: 5907 },
+          { year: '2023', value: 6117 },
+          { year: '2023', value: 5855 },
+          { year: '2024', value: 6026 },
+          { year: '2024', value: 7018 },
+          { year: '2024', value: 8359 },
+          { year: '2024', value: 9556 },
+          { year: '2024', value: 9720 },
+          { year: '2025', value: 10314 },
+          { year: '2025', value: 13212 },
+          { year: '2025', value: 15868 }
+        ]
+      };
+
       const presetStrategies = await this.backtestService.getPresetStrategiesWithMetrics();
       
       let userStrategies: any[] = [];
@@ -117,7 +157,8 @@ export class BacktestController {
         console.error('Failed to load user strategies:', dbError.message);
       }
 
-      return [...presetStrategies, ...userStrategies];
+      // Return real backtest first, then presets, then user strategies
+      return [realBacktest, ...presetStrategies, ...userStrategies];
     } catch (error) {
       console.error('Failed to load strategies:', error.message);
       return this.backtestService.getStrategyTemplates();
@@ -325,5 +366,180 @@ export class BacktestController {
       orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
       take: 100,
     });
+  }
+
+  // Admin analytics endpoint
+  @UseGuards(JwtAuthGuard)
+  @Get('admin/analytics')
+  async getAdminAnalytics() {
+    try {
+      const now = new Date();
+      const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+      // User statistics
+      const totalUsers = await this.prisma.user.count();
+      const usersBySubscription = await this.prisma.user.groupBy({
+        by: ['subscriptionPlan'],
+        _count: true,
+      });
+
+      const subscriptionStats = {
+        free: usersBySubscription.find(u => u.subscriptionPlan === 'free')?._count || 0,
+        starter: usersBySubscription.find(u => u.subscriptionPlan === 'starter')?._count || 0,
+        pro: usersBySubscription.find(u => u.subscriptionPlan === 'pro')?._count || 0,
+        enterprise: usersBySubscription.find(u => u.subscriptionPlan === 'enterprise')?._count || 0,
+      };
+
+      // Strategy statistics
+      const totalStrategies = await this.prisma.strategy.count();
+      const activeStrategies = await this.prisma.strategy.count({
+        where: { isActive: true },
+      });
+      const publicStrategies = await this.prisma.strategy.count({
+        where: { isPublic: true },
+      });
+
+      // Backtest statistics
+      const totalBacktests = await this.prisma.backtestResult.count();
+      const backtestsLast24h = await this.prisma.backtestResult.count({
+        where: { createdAt: { gte: oneDayAgo } },
+      });
+      const backtestsLast7d = await this.prisma.backtestResult.count({
+        where: { createdAt: { gte: sevenDaysAgo } },
+      });
+      const backtestsLast30d = await this.prisma.backtestResult.count({
+        where: { createdAt: { gte: thirtyDaysAgo } },
+      });
+
+      // Queue statistics
+      const queueStats = await this.getQueueStats();
+      
+      // Recent signups
+      const recentSignups = await this.prisma.user.count({
+        where: { createdAt: { gte: sevenDaysAgo } },
+      });
+
+      // Average backtest metrics
+      const avgMetrics = await this.prisma.backtestResult.aggregate({
+        _avg: {
+          sharpeRatio: true,
+          winRate: true,
+          yearlyReturn: true,
+        },
+      });
+
+      // System health
+      const systemHealth = {
+        database: 'healthy',
+        api: 'healthy',
+        worker: 'unknown', // Will be updated by worker status check
+        uptime: Math.floor(process.uptime()),
+      };
+
+      return {
+        users: {
+          total: totalUsers,
+          bySubscription: subscriptionStats,
+          recentSignups,
+        },
+        strategies: {
+          total: totalStrategies,
+          active: activeStrategies,
+          public: publicStrategies,
+        },
+        backtests: {
+          total: totalBacktests,
+          last24h: backtestsLast24h,
+          last7d: backtestsLast7d,
+          last30d: backtestsLast30d,
+          avgSharpe: avgMetrics._avg.sharpeRatio || 0,
+          avgWinRate: avgMetrics._avg.winRate || 0,
+          avgYearlyReturn: avgMetrics._avg.yearlyReturn || 0,
+        },
+        queue: queueStats,
+        system: systemHealth,
+      };
+    } catch (error) {
+      console.error('Failed to fetch admin analytics:', error);
+      return {
+        users: { total: 0, bySubscription: { free: 0, starter: 0, pro: 0, enterprise: 0 }, recentSignups: 0 },
+        strategies: { total: 0, active: 0, public: 0 },
+        backtests: { total: 0, last24h: 0, last7d: 0, last30d: 0, avgSharpe: 0, avgWinRate: 0, avgYearlyReturn: 0 },
+        queue: { queued: 0, processing: 0, completed: 0, totalInQueue: 0, estimatedWaitMinutes: 0 },
+        system: { database: 'unknown', api: 'unknown', worker: 'unknown', uptime: 0 },
+      };
+    }
+  }
+
+  // Admin recent activity endpoint
+  @UseGuards(JwtAuthGuard)
+  @Get('admin/recent-activity')
+  async getRecentActivity() {
+    try {
+      // Recent backtests
+      const recentBacktests = await this.prisma.backtestResult.findMany({
+        take: 10,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          user: {
+            select: { name: true, email: true },
+          },
+        },
+      });
+
+      // Recent queue items
+      const recentQueueItems = await this.prisma.backtestQueue.findMany({
+        take: 10,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          user: {
+            select: { name: true, email: true },
+          },
+        },
+      });
+
+      // Recent user signups
+      const recentUsers = await this.prisma.user.findMany({
+        take: 10,
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          subscriptionPlan: true,
+          createdAt: true,
+        },
+      });
+
+      return {
+        backtests: recentBacktests.map(b => ({
+          id: b.id,
+          name: b.name,
+          user: b.user?.name || 'Unknown',
+          netProfit: b.netProfitUsd,
+          sharpe: b.sharpeRatio,
+          winRate: b.winRate,
+          createdAt: b.createdAt,
+        })),
+        queueItems: recentQueueItems.map(q => ({
+          id: q.id,
+          strategyName: q.strategyName,
+          user: q.user?.name || 'Unknown',
+          status: q.status,
+          createdAt: q.createdAt,
+          completedAt: q.completedAt,
+        })),
+        users: recentUsers,
+      };
+    } catch (error) {
+      console.error('Failed to fetch recent activity:', error);
+      return {
+        backtests: [],
+        queueItems: [],
+        users: [],
+      };
+    }
   }
 }
