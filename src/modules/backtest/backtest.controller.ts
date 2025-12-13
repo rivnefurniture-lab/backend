@@ -806,6 +806,40 @@ export class BacktestController {
     }
   }
 
+  // Get all trades for a strategy
+  @Get('strategies/:id/all-trades')
+  async getAllStrategyTrades(@Param('id') id: string) {
+    // For the real strategy, load from JSON file
+    if (id === 'real-rsi-ma-bb-2023-2025') {
+      try {
+        const fs = require('fs');
+        const path = require('path');
+        const tradesPath = path.join(process.cwd(), 'data', 'real_strategy_trades.json');
+        const tradesData = fs.readFileSync(tradesPath, 'utf-8');
+        const allTrades = JSON.parse(tradesData);
+        return {
+          strategyId: id,
+          total: allTrades.length,
+          trades: allTrades,
+        };
+      } catch (e) {
+        return {
+          strategyId: id,
+          total: 0,
+          trades: [],
+          error: 'Trades file not found',
+        };
+      }
+    }
+    
+    // For other strategies, return empty for now
+    return {
+      strategyId: id,
+      total: 0,
+      trades: [],
+    };
+  }
+
   // Admin recent activity endpoint
   @UseGuards(JwtAuthGuard)
   @Get('admin/recent-activity')
