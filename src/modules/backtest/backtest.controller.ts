@@ -639,6 +639,87 @@ export class BacktestController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Post('queue/:id/cancel')
+  async cancelBacktest(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
+    const userId = await this.getUserId(req);
+    const queueItem = await this.prisma.backtestQueue.findFirst({
+      where: { id: parseInt(id), userId },
+    });
+
+    if (!queueItem) {
+      return { error: 'Backtest not found or access denied' };
+    }
+
+    if (queueItem.status === 'completed') {
+      return { error: 'Cannot cancel completed backtest' };
+    }
+
+    await this.prisma.backtestQueue.update({
+      where: { id: parseInt(id) },
+      data: { status: 'cancelled', completedAt: new Date() },
+    });
+
+    return { success: true, message: 'Backtest cancelled' };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('limits')
+  async getBacktestLimits(@Req() req: AuthenticatedRequest) {
+    const userId = await this.getUserId(req);
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { subscriptionPlan: true },
+    });
+
+    const plan = user?.subscriptionPlan || 'free';
+    
+    // Define limits per plan
+    const limits = {
+      free: { monthly: 5, concurrent: 1 },
+      starter: { monthly: 20, concurrent: 2 },
+      pro: { monthly: 100, concurrent: 5 },
+      enterprise: { monthly: -1, concurrent: 10 }, // -1 = unlimited
+    };
+
+    const planLimits = limits[plan] || limits.free;
+
+    // Count backtests this month
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+
+    const usedThisMonth = await this.prisma.backtestQueue.count({
+      where: {
+        userId,
+        createdAt: { gte: startOfMonth },
+        status: { not: 'cancelled' },
+      },
+    });
+
+    const currentlyRunning = await this.prisma.backtestQueue.count({
+      where: {
+        userId,
+        status: { in: ['queued', 'processing'] },
+      },
+    });
+
+    return {
+      plan,
+      limits: planLimits,
+      used: {
+        monthly: usedThisMonth,
+        concurrent: currentlyRunning,
+      },
+      remaining: {
+        monthly: planLimits.monthly === -1 ? -1 : planLimits.monthly - usedThisMonth,
+        concurrent: planLimits.concurrent - currentlyRunning,
+      },
+      canRunBacktest: (planLimits.monthly === -1 || usedThisMonth < planLimits.monthly) && 
+                      currentlyRunning < planLimits.concurrent,
+    };
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Get('queue/stats')
   async getQueueStats() {
     const queued = await this.prisma.backtestQueue.count({
