@@ -297,7 +297,7 @@ export class BacktestController {
           tags: b.pairs
             ? JSON.parse(b.pairs as string).slice(0, 3)
             : ['Crypto'],
-          updatedAt: b.updatedAt,
+          updatedAt: b.createdAt,
           history: b.chartData
             ? JSON.parse(b.chartData as string).monthlyGrowth?.map((m: any) => ({
                 year: m.month.split('-')[0],
