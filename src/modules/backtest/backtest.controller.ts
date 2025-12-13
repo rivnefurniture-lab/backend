@@ -140,37 +140,21 @@ export class BacktestController {
         ],
         tags: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
         updatedAt: new Date('2025-12-10'),
-        // Equity curve - 2023-2025 only
+        isPreset: true,
+        // Equity curve - monthly snapshots 2023-2025
         history: [
-          { year: '2023', value: 5075 },
-          { year: '2023', value: 5079 },
-          { year: '2023', value: 5907 },
-          { year: '2023', value: 5943 },
-          { year: '2023', value: 6117 },
-          { year: '2023', value: 6136 },
-          { year: '2023', value: 5713 },
-          { year: '2023', value: 5787 },
-          { year: '2023', value: 5855 },
-          { year: '2024', value: 6026 },
-          { year: '2024', value: 6061 },
-          { year: '2024', value: 7018 },
-          { year: '2024', value: 7144 },
-          { year: '2024', value: 7302 },
-          { year: '2024', value: 8359 },
-          { year: '2024', value: 9556 },
-          { year: '2024', value: 9724 },
-          { year: '2024', value: 9720 },
-          { year: '2025', value: 10314 },
-          { year: '2025', value: 10070 },
-          { year: '2025', value: 13212 },
-          { year: '2025', value: 15126 },
-          { year: '2025', value: 15056 },
-          { year: '2025', value: 15152 },
-          { year: '2025', value: 15257 },
-          { year: '2025', value: 15321 },
-          { year: '2025', value: 15893 },
-          { year: '2025', value: 14571 },
-          { year: '2025', value: 15868 },
+          { year: 'Jan 23', value: 5000 },
+          { year: 'Apr 23', value: 5075 },
+          { year: 'Jul 23', value: 5500 },
+          { year: 'Oct 23', value: 5855 },
+          { year: 'Jan 24', value: 6026 },
+          { year: 'Apr 24', value: 7018 },
+          { year: 'Jul 24', value: 8359 },
+          { year: 'Oct 24', value: 9720 },
+          { year: 'Jan 25', value: 10314 },
+          { year: 'Apr 25', value: 13212 },
+          { year: 'Jul 25', value: 15126 },
+          { year: 'Oct 25', value: 15868 },
         ],
         // Trading conditions configuration
         config: {
@@ -465,11 +449,10 @@ export class BacktestController {
     return this.backtestService.getBacktestResults(userId);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Get('results/:id')
-  async getResult(@Req() req: AuthenticatedRequest, @Param('id') id: string) {
-    const userId = await this.getUserId(req);
-    return this.backtestService.getBacktestResult(parseInt(id), userId);
+  async getResult(@Param('id') id: string) {
+    // Allow viewing any backtest result (no auth required for viewing)
+    return this.backtestService.getBacktestResult(parseInt(id));
   }
 
   @Get('results/:id/export/csv')
