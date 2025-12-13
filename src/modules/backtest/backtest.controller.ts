@@ -715,23 +715,93 @@ export class BacktestController {
       where: { status: 'completed' },
     });
 
+    // Calculate total estimated wait time
+    const queuedItems = await this.prisma.backtestQueue.findMany({
+      where: { status: { in: ['queued', 'processing'] } },
+      select: { payload: true, startedAt: true, status: true },
+    });
+
+    let totalWaitSeconds = 0;
+    for (const item of queuedItems) {
+      const estimated = this.queueService.estimateBacktestTime(JSON.parse(item.payload));
+      if (item.status === 'processing' && item.startedAt) {
+        const elapsed = (Date.now() - item.startedAt.getTime()) / 1000;
+        totalWaitSeconds += Math.max(0, estimated - elapsed);
+      } else {
+        totalWaitSeconds += estimated;
+      }
+    }
+
     return {
       queued,
       processing,
       completed,
       totalInQueue: queued + processing,
-      estimatedWaitMinutes: queued * 15,
+      estimatedWaitSeconds: Math.ceil(totalWaitSeconds),
+      estimatedWaitMinutes: Math.ceil(totalWaitSeconds / 60),
     };
   }
 
-  // Admin endpoint - get all queue items
+  // Admin endpoint - get all queue items with time estimates
   @UseGuards(JwtAuthGuard)
   @Get('queue/all')
   async getAllQueueItems() {
-    return await this.prisma.backtestQueue.findMany({
+    const items = await this.prisma.backtestQueue.findMany({
       orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
       take: 100,
+      include: { user: { select: { email: true, name: true } } },
     });
+
+    // Add time estimates to each item
+    const itemsWithEstimates = await Promise.all(
+      items.map(async (item) => {
+        const estimate = await this.queueService.getEstimatedCompletionTime(item.id);
+        return {
+          ...item,
+          estimatedSeconds: estimate?.estimatedSeconds || 0,
+          estimatedCompletion: estimate?.estimatedCompletion || null,
+          progress: estimate?.progress || 0,
+        };
+      })
+    );
+
+    return itemsWithEstimates;
+  }
+
+  // Get detailed status for user's active backtest (for floating monitor)
+  @UseGuards(JwtAuthGuard)
+  @Get('queue/my-active')
+  async getMyActiveBacktests(@Req() req: any) {
+    const userId = req.user?.sub || req.user?.id;
+    
+    const activeItems = await this.prisma.backtestQueue.findMany({
+      where: { 
+        userId,
+        status: { in: ['queued', 'processing'] },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const itemsWithDetails = await Promise.all(
+      activeItems.map(async (item) => {
+        const estimate = await this.queueService.getEstimatedCompletionTime(item.id);
+        const position = await this.queueService.getQueuePosition(item.id);
+        
+        return {
+          id: item.id,
+          strategyName: item.strategyName,
+          status: item.status,
+          queuePosition: position?.queuePosition || 0,
+          progress: estimate?.progress || 0,
+          estimatedSeconds: estimate?.estimatedSeconds || 0,
+          estimatedCompletion: estimate?.estimatedCompletion || null,
+          startedAt: item.startedAt,
+          createdAt: item.createdAt,
+        };
+      })
+    );
+
+    return itemsWithDetails;
   }
 
   // Admin analytics endpoint
