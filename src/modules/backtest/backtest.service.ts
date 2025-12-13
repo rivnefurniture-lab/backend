@@ -1651,7 +1651,7 @@ print(json.dumps(result))
 
   /**
    * Rerun a strategy backtest with custom parameters
-   * Uses Contabo server with backtest2.py for accurate results
+   * Returns a message to use the queue system for better reliability
    */
   async rerunBacktestWithConfig(
     strategyId: string,
@@ -1662,95 +1662,55 @@ print(json.dumps(result))
       pairs?: string[];
     },
   ): Promise<any> {
-    // Strategy configuration for RSI MA BB strategy
-    const strategyConfig = {
-      strategy_name: 'RSI_MA_BB_Rerun',
-      entry_conditions: [
-        {
-          indicator: 'RSI',
-          subfields: {
-            Timeframe: '1h',
-            'RSI Length': 21,
-            'Signal Value': 20,
-            Condition: 'Less Than',
+    // For now, return a message directing users to use the queue system
+    // The queue system uses the same backtest2.py on Contabo and is more reliable
+    return {
+      status: 'redirect',
+      message: 'For accurate backtests with historical data, please use the main Backtest page to add your backtest to the queue. Queue backtests run on our server with the full backtest2.py engine and will notify you when complete.',
+      suggestedAction: 'use_queue',
+      payload: {
+        strategy_name: 'RSI_MA_BB_Custom',
+        entry_conditions: [
+          {
+            indicator: 'RSI',
+            subfields: {
+              Timeframe: '1h',
+              'RSI Length': 21,
+              'Signal Value': 20,
+              Condition: 'Less Than',
+            },
           },
-        },
-        {
-          indicator: 'MA',
-          subfields: {
-            Timeframe: '1h',
-            'MA Type': 'EMA',
-            'Fast MA': 20,
-            'Slow MA': 100,
-            Condition: 'Less Than',
+          {
+            indicator: 'MA',
+            subfields: {
+              Timeframe: '1h',
+              'MA Type': 'EMA',
+              'Fast MA': 20,
+              'Slow MA': 100,
+              Condition: 'Less Than',
+            },
           },
-        },
-      ],
-      exit_conditions: [
-        {
-          indicator: 'BollingerBands',
-          subfields: {
-            Timeframe: '1d',
-            'BB% Period': 50,
-            Deviation: 1,
-            Condition: 'Greater Than',
-            'Signal Value': 0.1,
+        ],
+        exit_conditions: [
+          {
+            indicator: 'BollingerBands',
+            subfields: {
+              Timeframe: '1d',
+              'BB% Period': 50,
+              Deviation: 1,
+              Condition: 'Greater Than',
+              'Signal Value': 0.1,
+            },
           },
-        },
-      ],
-      max_active_deals: 5,
-      trading_fee: 0.1,
-      base_order_size: 1000,
-      safety_order_toggle: false,
-      price_change_active: false,
-      conditions_active: true,
-      reinvest_profit: 100,
+        ],
+        max_active_deals: 5,
+        trading_fee: 0.1,
+        base_order_size: 1000,
+        initial_balance: config.initialCapital || 5000,
+        start_date: config.startDate || '2023-01-01',
+        end_date: config.endDate || '2025-12-10',
+        pairs: config.pairs || ['BTC/USDT', 'ETH/USDT'],
+      },
     };
-
-    // Build the payload for Contabo backtest2.py
-    const payload = {
-      ...strategyConfig,
-      initial_balance: config.initialCapital || 5000,
-      start_date: config.startDate || '2023-01-01',
-      end_date: config.endDate || '2025-12-10',
-      pairs: config.pairs || ['BTC/USDT', 'ETH/USDT'],
-    };
-
-    this.logger.log(
-      `Rerunning backtest via Contabo: ${config.startDate} to ${config.endDate}, ${config.pairs?.length || 0} pairs`,
-    );
-
-    // Call Contabo server directly
-    const contaboUrl = process.env.DATA_SERVER_URL || 'http://144.91.86.94:5000';
-    
-    try {
-      const response = await fetch(`${contaboUrl}/backtest/run`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(300000), // 5 minute timeout
-      });
-
-      if (!response.ok) {
-        throw new Error(`Contabo server returned ${response.status}`);
-      }
-
-      const result = await response.json();
-      
-      if (result.status === 'error') {
-        return {
-          status: 'error',
-          message: result.message || 'Backtest failed',
-        };
-      }
-
-      return result;
-    } catch (e: any) {
-      this.logger.error(`Contabo backtest failed: ${e.message}`);
-      return {
-        status: 'error',
-        message: `Backtest failed: ${e.message}. Please try again or use the queue system for complex backtests.`,
-      };
-    }
   }
 }
