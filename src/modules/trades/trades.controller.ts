@@ -21,20 +21,20 @@ export class TradesController {
   private async getUserId(req: AuthenticatedRequest): Promise<number> {
     const supabaseId = req.user?.sub || '';
     const email = req.user?.email || '';
-    
+
     try {
       let user = await this.prisma.user.findFirst({
         where: { supabaseId },
         select: { id: true },
       });
-      
+
       if (!user && email) {
         user = await this.prisma.user.findUnique({
           where: { email },
           select: { id: true },
         });
       }
-      
+
       return user?.id || 1;
     } catch (e) {
       return 1;
@@ -48,11 +48,11 @@ export class TradesController {
     @Query('range') range?: string,
   ) {
     const userId = await this.getUserId(req);
-    
+
     // Calculate date range
     let dateFrom: Date | undefined;
     const now = new Date();
-    
+
     switch (range) {
       case '1d':
         dateFrom = new Date(now.setDate(now.getDate() - 1));
@@ -70,11 +70,11 @@ export class TradesController {
 
     // Build where clause
     const where: any = { userId };
-    
+
     if (dateFrom) {
       where.createdAt = { gte: dateFrom };
     }
-    
+
     if (filter && filter !== 'all') {
       switch (filter) {
         case 'buy':
@@ -106,7 +106,7 @@ export class TradesController {
   @Get('stats')
   async getStats(@Req() req: AuthenticatedRequest) {
     const userId = await this.getUserId(req);
-    
+
     try {
       // Get all trades
       const trades = await this.prisma.trade.findMany({
@@ -116,7 +116,7 @@ export class TradesController {
       // Get today's trades
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
-      
+
       const todayTrades = await this.prisma.trade.findMany({
         where: {
           userId,
@@ -125,35 +125,47 @@ export class TradesController {
       });
 
       // Calculate stats - only count CLOSED trades for win rate (trades with exitPrice set)
-      const closedTrades = trades.filter(t => t.exitPrice !== null);
-      const openTrades = trades.filter(t => t.exitPrice === null && t.side === 'buy');
-      
+      const closedTrades = trades.filter((t) => t.exitPrice !== null);
+      const openTrades = trades.filter(
+        (t) => t.exitPrice === null && t.side === 'buy',
+      );
+
       const totalClosedTrades = closedTrades.length;
-      const totalProfit = closedTrades.reduce((sum, t) => sum + (t.profitLoss || 0), 0);
-      const winningTrades = closedTrades.filter(t => (t.profitLoss || 0) > 0).length;
-      const winRate = totalClosedTrades > 0 ? (winningTrades / totalClosedTrades) * 100 : 0;
-      
+      const totalProfit = closedTrades.reduce(
+        (sum, t) => sum + (t.profitLoss || 0),
+        0,
+      );
+      const winningTrades = closedTrades.filter(
+        (t) => (t.profitLoss || 0) > 0,
+      ).length;
+      const winRate =
+        totalClosedTrades > 0 ? (winningTrades / totalClosedTrades) * 100 : 0;
+
       // Total trades = closed trades + open positions
       const totalTrades = totalClosedTrades + openTrades.length;
 
       // Calculate today's PnL
-      const todayProfit = todayTrades.reduce((sum, t) => sum + (t.profitLoss || 0), 0);
-      
+      const todayProfit = todayTrades.reduce(
+        (sum, t) => sum + (t.profitLoss || 0),
+        0,
+      );
+
       // Get total invested today (sum of entry values)
       const todayInvested = todayTrades.reduce((sum, t) => {
         if (t.side === 'buy' && t.entryPrice) {
-          return sum + (t.entryPrice * t.quantity);
+          return sum + t.entryPrice * t.quantity;
         }
         return sum;
       }, 0);
-      
+
       // Calculate PnL percentage
-      const todayPnLPercent = todayInvested > 0 ? (todayProfit / todayInvested) * 100 : 0;
+      const todayPnLPercent =
+        todayInvested > 0 ? (todayProfit / todayInvested) * 100 : 0;
 
       // Get yesterday's trades for comparison
       const yesterdayStart = new Date(todayStart);
       yesterdayStart.setDate(yesterdayStart.getDate() - 1);
-      
+
       const yesterdayTrades = await this.prisma.trade.findMany({
         where: {
           userId,
@@ -163,8 +175,11 @@ export class TradesController {
           },
         },
       });
-      
-      const yesterdayProfit = yesterdayTrades.reduce((sum, t) => sum + (t.profitLoss || 0), 0);
+
+      const yesterdayProfit = yesterdayTrades.reduce(
+        (sum, t) => sum + (t.profitLoss || 0),
+        0,
+      );
 
       return {
         totalTrades,

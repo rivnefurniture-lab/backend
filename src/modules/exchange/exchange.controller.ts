@@ -1,4 +1,13 @@
-import { Controller, Post, Get, Body, Query, UseGuards, Req, Param } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Body,
+  Query,
+  UseGuards,
+  Req,
+  Param,
+} from '@nestjs/common';
 import type { Request } from 'express';
 import { ExchangeService } from './exchange.service';
 import { ConnectDto } from './connect.dto';
@@ -27,21 +36,21 @@ export class ExchangeController {
   private async getUserId(req: AuthenticatedRequest): Promise<number> {
     const supabaseId = req.user?.sub || '';
     const email = req.user?.email || '';
-    
+
     try {
       // Find by supabaseId
       let user = await this.prisma.user.findFirst({
         where: { supabaseId },
         select: { id: true },
       });
-      
+
       // Try by email
       if (!user && email) {
         user = await this.prisma.user.findUnique({
           where: { email },
           select: { id: true },
         });
-        
+
         // Update supabaseId if found by email
         if (user && supabaseId) {
           await this.prisma.user.update({
@@ -50,7 +59,7 @@ export class ExchangeController {
           });
         }
       }
-      
+
       // Create if not found
       if (!user && email) {
         user = await this.prisma.user.create({
@@ -63,7 +72,7 @@ export class ExchangeController {
           select: { id: true },
         });
       }
-      
+
       return user?.id || 1;
     } catch (e) {
       console.error('Error resolving user ID:', e);
@@ -85,7 +94,10 @@ export class ExchangeController {
   }
 
   @Post('disconnect/:exchange')
-  async disconnect(@Req() req: AuthenticatedRequest, @Param('exchange') exchange: string) {
+  async disconnect(
+    @Req() req: AuthenticatedRequest,
+    @Param('exchange') exchange: string,
+  ) {
     const userId = await this.getUserId(req);
     return this.exchange.disconnect(userId, exchange);
   }
@@ -97,21 +109,36 @@ export class ExchangeController {
   }
 
   @Get('balance')
-  async getBalance(@Req() req: AuthenticatedRequest, @Query('exchange') exchange: string) {
+  async getBalance(
+    @Req() req: AuthenticatedRequest,
+    @Query('exchange') exchange: string,
+  ) {
     const userId = await this.getUserId(req);
     return this.exchange.getBalance(exchange, userId);
   }
 
   @Get('markets')
-  async getMarkets(@Req() req: AuthenticatedRequest, @Query('exchange') exchange: string) {
+  async getMarkets(
+    @Req() req: AuthenticatedRequest,
+    @Query('exchange') exchange: string,
+  ) {
     const userId = await this.getUserId(req);
     return this.exchange.getMarkets(exchange, userId);
   }
 
   @Post('order/market')
-  async createOrder(@Req() req: AuthenticatedRequest, @Body() body: MarketOrderDto) {
+  async createOrder(
+    @Req() req: AuthenticatedRequest,
+    @Body() body: MarketOrderDto,
+  ) {
     const userId = await this.getUserId(req);
     const { exchange, symbol, side, amountBase } = body;
-    return this.exchange.createMarketOrder(exchange, symbol, side, amountBase, userId);
+    return this.exchange.createMarketOrder(
+      exchange,
+      symbol,
+      side,
+      amountBase,
+      userId,
+    );
   }
 }

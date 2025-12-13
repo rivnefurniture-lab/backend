@@ -10,7 +10,12 @@ import { PrismaModule } from '../../prisma/prisma.module';
 @Module({
   imports: [PrismaModule, ScheduleModule.forRoot()],
   controllers: [BacktestController],
-  providers: [BacktestService, StrategySchedulerService, QueueService, NotificationService],
+  providers: [
+    BacktestService,
+    StrategySchedulerService,
+    QueueService,
+    NotificationService,
+  ],
   exports: [BacktestService, QueueService],
 })
 export class BacktestModule {}

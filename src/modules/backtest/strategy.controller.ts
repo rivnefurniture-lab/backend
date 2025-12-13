@@ -1,4 +1,14 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, UseGuards, Req } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Body,
+  Param,
+  UseGuards,
+  Req,
+} from '@nestjs/common';
 import { StrategyService } from './strategy.service';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 
@@ -32,7 +42,11 @@ export class StrategyController {
 
   @UseGuards(JwtAuthGuard)
   @Put(':id')
-  async updateStrategy(@Req() req: any, @Param('id') id: string, @Body() body: any) {
+  async updateStrategy(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: any,
+  ) {
     const userId = req.user?.sub ? parseInt(req.user.sub) : 1;
     return this.strategyService.updateStrategy(parseInt(id), userId, body);
   }
@@ -48,9 +62,17 @@ export class StrategyController {
 
   @UseGuards(JwtAuthGuard)
   @Post(':id/start')
-  async startStrategy(@Req() req: any, @Param('id') id: string, @Body() body: { initialBalance?: number }) {
+  async startStrategy(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { initialBalance?: number },
+  ) {
     const userId = req.user?.sub ? parseInt(req.user.sub) : 1;
-    return this.strategyService.startStrategyRun(parseInt(id), userId, body.initialBalance);
+    return this.strategyService.startStrategyRun(
+      parseInt(id),
+      userId,
+      body.initialBalance,
+    );
   }
 
   @UseGuards(JwtAuthGuard)
@@ -114,4 +136,3 @@ export class StrategyController {
     return this.strategyService.getDashboardStats(1);
   }
 }
-

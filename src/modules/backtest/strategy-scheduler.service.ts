@@ -9,11 +9,13 @@ export class StrategySchedulerService implements OnModuleInit {
 
   async onModuleInit() {
     this.logger.log('Strategy Scheduler initialized');
-    
+
     // Check data status on startup
     const status = this.backtestService.getDataStatus();
-    this.logger.log(`Data status: ${status.fileCount} files, updating: ${status.isUpdating}`);
-    
+    this.logger.log(
+      `Data status: ${status.fileCount} files, updating: ${status.isUpdating}`,
+    );
+
     if (status.hasData) {
       // Calculate strategies after 30 seconds
       setTimeout(() => {

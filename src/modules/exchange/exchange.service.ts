@@ -50,13 +50,15 @@ export class ExchangeService implements OnModuleInit {
       const savedConnections = await this.prisma.exchangeConnection.findMany({
         where: { isActive: true },
       });
-      
+
       for (const conn of savedConnections) {
         try {
           const apiKey = decrypt(conn.apiKeyEnc);
           const secret = decrypt(conn.secretEnc);
-          const password = conn.passwordEnc ? decrypt(conn.passwordEnc) : undefined;
-          
+          const password = conn.passwordEnc
+            ? decrypt(conn.passwordEnc)
+            : undefined;
+
           if (apiKey && secret) {
             await this.connectInternal(conn.userId, conn.exchange, {
               apiKey,
@@ -64,7 +66,9 @@ export class ExchangeService implements OnModuleInit {
               password,
               testnet: conn.testnet,
             });
-            console.log(`Restored ${conn.exchange} connection for user ${conn.userId}`);
+            console.log(
+              `Restored ${conn.exchange} connection for user ${conn.userId}`,
+            );
           }
         } catch (e) {
           console.error(`Failed to restore connection:`, e);
@@ -118,10 +122,14 @@ export class ExchangeService implements OnModuleInit {
     return ex;
   }
 
-  private async connectInternal(userId: number, exchange: string, creds: Omit<Connection, 'instance'>) {
+  private async connectInternal(
+    userId: number,
+    exchange: string,
+    creds: Omit<Connection, 'instance'>,
+  ) {
     const instance = this.makeExchange(exchange, creds);
     await instance.loadMarkets();
-    
+
     if (!this.connections[exchange]) {
       this.connections[exchange] = {};
     }
@@ -129,10 +137,14 @@ export class ExchangeService implements OnModuleInit {
     return { ok: true };
   }
 
-  async connect(userId: number, exchange: string, creds: Omit<Connection, 'instance'>) {
+  async connect(
+    userId: number,
+    exchange: string,
+    creds: Omit<Connection, 'instance'>,
+  ) {
     // Connect to exchange
     await this.connectInternal(userId, exchange, creds);
-    
+
     // Try to save to database (skip if table doesn't exist)
     try {
       await this.prisma.exchangeConnection.upsert({
@@ -167,7 +179,7 @@ export class ExchangeService implements OnModuleInit {
     if (this.connections[exchange]?.[userId]) {
       delete this.connections[exchange][userId];
     }
-    
+
     // Try to mark as inactive in database
     try {
       await this.prisma.exchangeConnection.updateMany({
@@ -177,7 +189,7 @@ export class ExchangeService implements OnModuleInit {
     } catch (e) {
       console.log('Could not update database');
     }
-    
+
     return { ok: true };
   }
 
@@ -202,8 +214,8 @@ export class ExchangeService implements OnModuleInit {
         where: { userId, isActive: true },
         select: { exchange: true, testnet: true, connectedAt: true },
       });
-      
-      return dbConnections.map(c => ({
+
+      return dbConnections.map((c) => ({
         exchange: c.exchange,
         testnet: c.testnet,
         connectedAt: c.connectedAt,
@@ -211,7 +223,12 @@ export class ExchangeService implements OnModuleInit {
       }));
     } catch (e) {
       // Table doesn't exist, return in-memory connections
-      const result: Array<{exchange: string; testnet: boolean; connectedAt: Date; isConnected: boolean}> = [];
+      const result: Array<{
+        exchange: string;
+        testnet: boolean;
+        connectedAt: Date;
+        isConnected: boolean;
+      }> = [];
       for (const [exchange, userConns] of Object.entries(this.connections)) {
         if (userConns[userId]) {
           result.push({

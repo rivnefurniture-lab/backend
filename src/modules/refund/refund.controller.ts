@@ -20,20 +20,20 @@ export class RefundController {
   private async getUserId(req: AuthenticatedRequest): Promise<number> {
     const supabaseId = req.user?.sub || '';
     const email = req.user?.email || '';
-    
+
     try {
       let user = await this.prisma.user.findFirst({
         where: { supabaseId },
         select: { id: true },
       });
-      
+
       if (!user && email) {
         user = await this.prisma.user.findUnique({
           where: { email },
           select: { id: true },
         });
       }
-      
+
       return user?.id || 1;
     } catch (e) {
       return 1;
@@ -47,7 +47,7 @@ export class RefundController {
     @Body() body: { reason: string },
   ) {
     const userId = await this.getUserId(req);
-    
+
     try {
       // Get user email
       const user = await this.prisma.user.findUnique({
@@ -73,8 +73,8 @@ export class RefundController {
       // TODO: Send email notification to admin
       console.log(`New refund request from ${user.email}: ${body.reason}`);
 
-      return { 
-        ok: true, 
+      return {
+        ok: true,
         message: 'Refund request submitted successfully',
         id: refund.id,
       };
@@ -88,7 +88,7 @@ export class RefundController {
   @Get('my')
   async getMyRequests(@Req() req: AuthenticatedRequest) {
     const userId = await this.getUserId(req);
-    
+
     try {
       return await this.prisma.refundRequest.findMany({
         where: { userId },

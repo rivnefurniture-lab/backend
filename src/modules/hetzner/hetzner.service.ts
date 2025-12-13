@@ -47,7 +47,11 @@ export class HetznerService {
     this.logger.log(`Hetzner Data Service initialized: ${this.baseUrl}`);
   }
 
-  private async request<T>(path: string, method: 'GET' | 'POST' = 'GET', body?: any): Promise<T | null> {
+  private async request<T>(
+    path: string,
+    method: 'GET' | 'POST' = 'GET',
+    body?: any,
+  ): Promise<T | null> {
     try {
       const response = await axios({
         method,
@@ -68,15 +72,25 @@ export class HetznerService {
 
   async isHealthy(): Promise<boolean> {
     try {
-      const response = await axios.get(`${this.baseUrl}/health`, { timeout: 5000 });
+      const response = await axios.get(`${this.baseUrl}/health`, {
+        timeout: 5000,
+      });
       return response.data?.status === 'healthy';
     } catch {
       return false;
     }
   }
 
-  async getDataStatus(): Promise<{ hasData: boolean; fileCount: number; files: any[] }> {
-    const result = await this.request<{ hasData: boolean; fileCount: number; files: any[] }>('/data/status');
+  async getDataStatus(): Promise<{
+    hasData: boolean;
+    fileCount: number;
+    files: any[];
+  }> {
+    const result = await this.request<{
+      hasData: boolean;
+      fileCount: number;
+      files: any[];
+    }>('/data/status');
     return result || { hasData: false, fileCount: 0, files: [] };
   }
 
@@ -90,8 +104,12 @@ export class HetznerService {
 
     // Convert BTC/USDT to BTC_USDT format for API
     const apiSymbol = symbol.replace('/', '_');
-    const result = await this.request<{ symbol: string; timestamp: string; data: DataRow }>(`/data/latest/${apiSymbol}`);
-    
+    const result = await this.request<{
+      symbol: string;
+      timestamp: string;
+      data: DataRow;
+    }>(`/data/latest/${apiSymbol}`);
+
     if (result?.data) {
       this.cache.set(cacheKey, { data: result.data, timestamp: Date.now() });
       return result.data;
@@ -102,20 +120,34 @@ export class HetznerService {
   async getDataRange(symbol: string, limit: number = 100): Promise<DataRow[]> {
     // Convert BTC/USDT to BTC_USDT format for API
     const apiSymbol = symbol.replace('/', '_');
-    const result = await this.request<{ symbol: string; count: number; data: DataRow[] }>(`/data/range/${apiSymbol}?limit=${limit}`);
+    const result = await this.request<{
+      symbol: string;
+      count: number;
+      data: DataRow[];
+    }>(`/data/range/${apiSymbol}?limit=${limit}`);
     return result?.data || [];
   }
 
-  async checkSignal(symbol: string, conditions: Array<{ indicator: string; operator: string; value: number }>): Promise<SignalCheckResult | null> {
-    const result = await this.request<SignalCheckResult>('/signal/check', 'POST', { symbol, conditions });
+  async checkSignal(
+    symbol: string,
+    conditions: Array<{ indicator: string; operator: string; value: number }>,
+  ): Promise<SignalCheckResult | null> {
+    const result = await this.request<SignalCheckResult>(
+      '/signal/check',
+      'POST',
+      { symbol, conditions },
+    );
     return result;
   }
 
   // Get indicator value from latest data
-  async getIndicatorValue(symbol: string, indicator: string): Promise<number | null> {
+  async getIndicatorValue(
+    symbol: string,
+    indicator: string,
+  ): Promise<number | null> {
     const data = await this.getLatestData(symbol);
     if (!data) return null;
-    
+
     const value = data[indicator];
     return typeof value === 'number' ? value : null;
   }
@@ -123,14 +155,25 @@ export class HetznerService {
   // Check multiple conditions for a symbol
   async checkConditions(
     symbol: string,
-    conditions: Array<{ indicator: string; operator: string; value: number }>
-  ): Promise<{ allMet: boolean; results: Array<{ indicator: string; met: boolean; currentValue: number | null }> }> {
+    conditions: Array<{ indicator: string; operator: string; value: number }>,
+  ): Promise<{
+    allMet: boolean;
+    results: Array<{
+      indicator: string;
+      met: boolean;
+      currentValue: number | null;
+    }>;
+  }> {
     const data = await this.getLatestData(symbol);
     if (!data) {
       return { allMet: false, results: [] };
     }
 
-    const results: Array<{ indicator: string; met: boolean; currentValue: number | null }> = [];
+    const results: Array<{
+      indicator: string;
+      met: boolean;
+      currentValue: number | null;
+    }> = [];
     let allMet = true;
 
     for (const cond of conditions) {
@@ -151,7 +194,11 @@ export class HetznerService {
         }
       }
 
-      results.push({ indicator: cond.indicator, met, currentValue: currentValue ?? null });
+      results.push({
+        indicator: cond.indicator,
+        met,
+        currentValue: currentValue ?? null,
+      });
       if (!met) allMet = false;
     }
 
@@ -169,4 +216,3 @@ export class HetznerService {
     this.cache.clear();
   }
 }
-

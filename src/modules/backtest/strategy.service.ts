@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ExchangeService } from '../exchange/exchange.service';
 
@@ -23,16 +28,19 @@ export class StrategyService {
   ) {}
 
   // ==================== STRATEGY CRUD ====================
-  
-  async createStrategy(userId: number, data: {
-    name: string;
-    description?: string;
-    category?: string;
-    config: StrategyConfig;
-    pairs: string[];
-    maxDeals?: number;
-    orderSize?: number;
-  }) {
+
+  async createStrategy(
+    userId: number,
+    data: {
+      name: string;
+      description?: string;
+      category?: string;
+      config: StrategyConfig;
+      pairs: string[];
+      maxDeals?: number;
+      orderSize?: number;
+    },
+  ) {
     return this.prisma.strategy.create({
       data: {
         name: data.name,
@@ -74,11 +82,11 @@ export class StrategyService {
         },
       },
     });
-    
+
     if (!strategy) {
       throw new NotFoundException('Strategy not found');
     }
-    
+
     return {
       ...strategy,
       config: JSON.parse(strategy.config),
@@ -86,19 +94,23 @@ export class StrategyService {
     };
   }
 
-  async updateStrategy(id: number, userId: number, data: Partial<{
-    name: string;
-    description: string;
-    category: string;
-    config: StrategyConfig;
-    pairs: string[];
-    maxDeals: number;
-    orderSize: number;
-  }>) {
+  async updateStrategy(
+    id: number,
+    userId: number,
+    data: Partial<{
+      name: string;
+      description: string;
+      category: string;
+      config: StrategyConfig;
+      pairs: string[];
+      maxDeals: number;
+      orderSize: number;
+    }>,
+  ) {
     const strategy = await this.prisma.strategy.findFirst({
       where: { id, userId },
     });
-    
+
     if (!strategy) {
       throw new NotFoundException('Strategy not found');
     }
@@ -117,7 +129,7 @@ export class StrategyService {
     const strategy = await this.prisma.strategy.findFirst({
       where: { id, userId },
     });
-    
+
     if (!strategy) {
       throw new NotFoundException('Strategy not found');
     }
@@ -131,15 +143,19 @@ export class StrategyService {
   }
 
   // ==================== STRATEGY RUNS (LIVE TRADING) ====================
-  
-  async startStrategyRun(strategyId: number, userId: number, initialBalance: number = 1000) {
+
+  async startStrategyRun(
+    strategyId: number,
+    userId: number,
+    initialBalance: number = 1000,
+  ) {
     const strategy = await this.getStrategy(strategyId, userId);
-    
+
     // Check if already running
     const existingRun = await this.prisma.strategyRun.findFirst({
       where: { strategyId, status: 'running' },
     });
-    
+
     if (existingRun) {
       throw new BadRequestException('Strategy is already running');
     }
@@ -166,8 +182,8 @@ export class StrategyService {
 
   async stopStrategyRun(strategyId: number, userId: number) {
     const run = await this.prisma.strategyRun.findFirst({
-      where: { 
-        strategyId, 
+      where: {
+        strategyId,
         userId,
         status: 'running',
       },
@@ -196,7 +212,7 @@ export class StrategyService {
 
   async getRunningStrategies(userId: number) {
     return this.prisma.strategyRun.findMany({
-      where: { 
+      where: {
         userId,
         status: 'running',
       },
@@ -223,10 +239,10 @@ export class StrategyService {
   }
 
   // ==================== EXECUTION LOOP ====================
-  
+
   private startExecutionLoop(runId: number, strategy: any) {
     const intervalMs = 60000; // Check every minute
-    
+
     const timer = setInterval(async () => {
       try {
         await this.executeStrategyTick(runId, strategy);
@@ -283,7 +299,12 @@ export class StrategyService {
     }
   }
 
-  private async checkSignals(run: any, symbol: string, config: StrategyConfig, exchange: any) {
+  private async checkSignals(
+    run: any,
+    symbol: string,
+    config: StrategyConfig,
+    exchange: any,
+  ) {
     // Fetch current market data
     const ohlcv = await exchange.fetchOHLCV(symbol, '1h', undefined, 100);
     if (!ohlcv || ohlcv.length < 20) return;
@@ -306,38 +327,60 @@ export class StrategyService {
     });
 
     // Check entry conditions
-    if (!openTrade && this.checkConditions(config.entry_conditions || [], { rsi: currentRSI, price: currentPrice })) {
+    if (
+      !openTrade &&
+      this.checkConditions(config.entry_conditions || [], {
+        rsi: currentRSI,
+        price: currentPrice,
+      })
+    ) {
       await this.executeTrade(run, symbol, 'buy', currentPrice, exchange);
     }
 
     // Check exit conditions
-    if (openTrade && this.checkConditions(config.exit_conditions || [], { rsi: currentRSI, price: currentPrice })) {
+    if (
+      openTrade &&
+      this.checkConditions(config.exit_conditions || [], {
+        rsi: currentRSI,
+        price: currentPrice,
+      })
+    ) {
       await this.closeTrade(run, openTrade, currentPrice, exchange);
     }
   }
 
-  private checkConditions(conditions: any[], indicators: { rsi: number; price: number }): boolean {
+  private checkConditions(
+    conditions: any[],
+    indicators: { rsi: number; price: number },
+  ): boolean {
     if (!conditions || conditions.length === 0) return false;
 
     for (const cond of conditions) {
       if (cond.indicator === 'RSI') {
         const value = cond.subfields?.['Signal Value'];
         const condition = cond.subfields?.Condition;
-        
+
         if (condition === 'Less Than' && indicators.rsi >= value) return false;
-        if (condition === 'Greater Than' && indicators.rsi <= value) return false;
+        if (condition === 'Greater Than' && indicators.rsi <= value)
+          return false;
       }
     }
     return true;
   }
 
-  private async executeTrade(run: any, symbol: string, side: 'buy' | 'sell', price: number, exchange: any) {
-    const quantity = run.initialBalance * 0.1 / price; // 10% position size
-    
+  private async executeTrade(
+    run: any,
+    symbol: string,
+    side: 'buy' | 'sell',
+    price: number,
+    exchange: any,
+  ) {
+    const quantity = (run.initialBalance * 0.1) / price; // 10% position size
+
     try {
       // Create order on exchange (paper trading for now)
       // const order = await exchange.createOrder(symbol, 'market', side, quantity);
-      
+
       const trade = await this.prisma.trade.create({
         data: {
           symbol,
@@ -371,9 +414,15 @@ export class StrategyService {
     }
   }
 
-  private async closeTrade(run: any, trade: any, exitPrice: number, exchange: any) {
+  private async closeTrade(
+    run: any,
+    trade: any,
+    exitPrice: number,
+    exchange: any,
+  ) {
     const profitLoss = (exitPrice - trade.entryPrice) * trade.quantity;
-    const profitPercent = ((exitPrice - trade.entryPrice) / trade.entryPrice) * 100;
+    const profitPercent =
+      ((exitPrice - trade.entryPrice) / trade.entryPrice) * 100;
 
     await this.prisma.trade.update({
       where: { id: trade.id },
@@ -396,26 +445,29 @@ export class StrategyService {
       },
     });
 
-    this.logger.log(`Closed trade on ${trade.symbol}: ${profitPercent.toFixed(2)}%`);
+    this.logger.log(
+      `Closed trade on ${trade.symbol}: ${profitPercent.toFixed(2)}%`,
+    );
   }
 
   private calculateRSI(closes: number[], period: number = 14): number[] {
     if (closes.length < period + 1) return [];
-    
+
     const rsi: number[] = [];
-    let gains = 0, losses = 0;
-    
+    let gains = 0,
+      losses = 0;
+
     for (let i = 1; i <= period; i++) {
       const diff = closes[i] - closes[i - 1];
       if (diff >= 0) gains += diff;
       else losses -= diff;
     }
-    
+
     let avgGain = gains / period;
     let avgLoss = losses / period;
     let rs = avgGain / (avgLoss || 1e-9);
     rsi.push(100 - 100 / (1 + rs));
-    
+
     for (let i = period + 1; i < closes.length; i++) {
       const diff = closes[i] - closes[i - 1];
       const gain = Math.max(diff, 0);
@@ -425,26 +477,29 @@ export class StrategyService {
       rs = avgGain / (avgLoss || 1e-9);
       rsi.push(100 - 100 / (1 + rs));
     }
-    
+
     return rsi;
   }
 
   // ==================== SAVE BACKTEST AS STRATEGY ====================
-  
-  async saveBacktestAsStrategy(userId: number, data: {
-    name: string;
-    description?: string;
-    config: StrategyConfig;
-    pairs: string[];
-    maxDeals?: number;
-    orderSize?: number;
-    backtestMetrics: {
-      netProfit: number;
-      maxDrawdown: number;
-      sharpeRatio: number;
-      winRate: number;
-    };
-  }) {
+
+  async saveBacktestAsStrategy(
+    userId: number,
+    data: {
+      name: string;
+      description?: string;
+      config: StrategyConfig;
+      pairs: string[];
+      maxDeals?: number;
+      orderSize?: number;
+      backtestMetrics: {
+        netProfit: number;
+        maxDrawdown: number;
+        sharpeRatio: number;
+        winRate: number;
+      };
+    },
+  ) {
     return this.prisma.strategy.create({
       data: {
         name: data.name,
@@ -464,18 +519,19 @@ export class StrategyService {
   }
 
   // ==================== DASHBOARD STATS ====================
-  
+
   async getDashboardStats(userId: number) {
-    const [strategies, runningCount, totalTrades, recentTrades] = await Promise.all([
-      this.prisma.strategy.count({ where: { userId } }),
-      this.prisma.strategyRun.count({ where: { userId, status: 'running' } }),
-      this.prisma.trade.count({ where: { userId } }),
-      this.prisma.trade.findMany({
-        where: { userId },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-      }),
-    ]);
+    const [strategies, runningCount, totalTrades, recentTrades] =
+      await Promise.all([
+        this.prisma.strategy.count({ where: { userId } }),
+        this.prisma.strategyRun.count({ where: { userId, status: 'running' } }),
+        this.prisma.trade.count({ where: { userId } }),
+        this.prisma.trade.findMany({
+          where: { userId },
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+        }),
+      ]);
 
     // Calculate total P&L
     const pnlResult = await this.prisma.trade.aggregate({
@@ -504,4 +560,3 @@ export class StrategyService {
     };
   }
 }
-

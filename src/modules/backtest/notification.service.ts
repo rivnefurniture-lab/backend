@@ -3,12 +3,14 @@ import * as nodemailer from 'nodemailer';
 
 @Injectable()
 export class NotificationService {
-  private readonly telegramToken = process.env.TELEGRAM_BOT_TOKEN || '8573074509:AAHDMYFF0WM6zSGkkhKHVNLTypxbw';
+  private readonly telegramToken =
+    process.env.TELEGRAM_BOT_TOKEN ||
+    '8573074509:AAHDMYFF0WM6zSGkkhKHVNLTypxbw';
   private readonly emailTransporter: nodemailer.Transporter;
 
   constructor() {
     // Setup email transporter with Gmail
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+
     this.emailTransporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
@@ -61,7 +63,7 @@ Please try again or contact support if the issue persists.
     }
 
     const url = `https://api.telegram.org/bot${this.telegramToken}/sendMessage`;
-    
+
     try {
       const response = await fetch(url, {
         method: 'POST',
@@ -192,11 +194,16 @@ Please try again or contact support if the issue persists.
 
     if ((notifyVia === 'telegram' || notifyVia === 'both') && telegramId) {
       promises.push(
-        this.sendTelegramNotification(telegramId, strategyName, metrics, status, error),
+        this.sendTelegramNotification(
+          telegramId,
+          strategyName,
+          metrics,
+          status,
+          error,
+        ),
       );
     }
 
     await Promise.all(promises);
   }
 }
-

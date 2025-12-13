@@ -11,7 +11,10 @@ export class PaymentsController {
   // Get crypto payment details
   @Post('crypto/create')
   createCrypto(@Body() body: { planId?: PlanId; email?: string }) {
-    return this.payments.createCryptoPayment(body.planId || 'starter', body.email);
+    return this.payments.createCryptoPayment(
+      body.planId || 'starter',
+      body.email,
+    );
   }
 
   // Get plan details

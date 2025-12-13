@@ -1,4 +1,11 @@
-import { IsString, IsNumber, IsArray, IsOptional, ValidateNested, IsBoolean } from 'class-validator';
+import {
+  IsString,
+  IsNumber,
+  IsArray,
+  IsOptional,
+  ValidateNested,
+  IsBoolean,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class ConditionSubfields {

@@ -7,4 +7,3 @@ import { HetznerService } from './hetzner.service';
   exports: [HetznerService],
 })
 export class HetznerModule {}
-
