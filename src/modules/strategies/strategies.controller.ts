@@ -189,13 +189,29 @@ export class StrategiesController {
     }
   }
 
+  // Cache for user strategies (30 second TTL)
+  private strategiesCache = new Map<number, { data: any[]; timestamp: number }>();
+  private readonly STRATEGIES_CACHE_TTL = 30000; // 30 seconds
+
   // Get user's saved strategies
   @UseGuards(JwtAuthGuard)
   @Get('my')
   async getMyStrategies(@Req() req: AuthenticatedRequest) {
     try {
       const userId = await this.getUserId(req);
-      return this.strategies.getUserStrategies(userId);
+      
+      // Check cache first
+      const cached = this.strategiesCache.get(userId);
+      if (cached && Date.now() - cached.timestamp < this.STRATEGIES_CACHE_TTL) {
+        return cached.data;
+      }
+      
+      const strategies = await this.strategies.getUserStrategies(userId);
+      
+      // Cache the result
+      this.strategiesCache.set(userId, { data: strategies, timestamp: Date.now() });
+      
+      return strategies;
     } catch (error) {
       console.error('Error fetching strategies:', error);
       return [];

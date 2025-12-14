@@ -450,13 +450,29 @@ export class BacktestController {
   }
 
   @UseGuards(JwtAuthGuard)
+  // Cache for backtest results (30 second TTL per user)
+  private resultsCache = new Map<number, { data: any[]; timestamp: number }>();
+  private readonly RESULTS_CACHE_TTL_MS = 30000; // 30 seconds
+
   @Get('results')
   async getResults(@Req() req: AuthenticatedRequest) {
     try {
-    const userId = await this.getUserId(req);
+      const userId = await this.getUserId(req);
+      
+      // Check cache first
+      const cached = this.resultsCache.get(userId);
+      if (cached && Date.now() - cached.timestamp < this.RESULTS_CACHE_TTL_MS) {
+        console.log(`[getResults] Cache hit for userId: ${userId}`);
+        return cached.data;
+      }
+      
       console.log(`[getResults] Fetching results for userId: ${userId}`);
       const results = await this.backtestService.getBacktestResults(userId);
       console.log(`[getResults] Found ${results.length} results`);
+      
+      // Cache the result
+      this.resultsCache.set(userId, { data: results, timestamp: Date.now() });
+      
       return results;
     } catch (error) {
       console.error('[getResults] Error:', error);
