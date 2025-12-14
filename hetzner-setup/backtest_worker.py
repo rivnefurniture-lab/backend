@@ -205,13 +205,13 @@ def process_backtest(queue_item, conn):
     estimated_duration = estimate_backtest_duration(payload)
     log(f"📊 Estimated duration: {estimated_duration}s")
     
-    # Update status to processing with estimated duration
+    # Update status to processing
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE "BacktestQueue" 
-        SET status = 'processing', "startedAt" = NOW(), progress = 0, "estimatedSeconds" = %s
+        SET status = 'processing', "startedAt" = NOW(), progress = 0
         WHERE id = %s
-    """, (estimated_duration, queue_id))
+    """, (queue_id,))
     conn.commit()
     
     # Progress updater that runs in background
