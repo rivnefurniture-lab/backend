@@ -445,8 +445,16 @@ export class BacktestController {
   @UseGuards(JwtAuthGuard)
   @Get('results')
   async getResults(@Req() req: AuthenticatedRequest) {
-    const userId = await this.getUserId(req);
-    return this.backtestService.getBacktestResults(userId);
+    try {
+      const userId = await this.getUserId(req);
+      console.log(`[getResults] Fetching results for userId: ${userId}`);
+      const results = await this.backtestService.getBacktestResults(userId);
+      console.log(`[getResults] Found ${results.length} results`);
+      return results;
+    } catch (error) {
+      console.error('[getResults] Error:', error);
+      throw error;
+    }
   }
 
   @Get('results/:id')

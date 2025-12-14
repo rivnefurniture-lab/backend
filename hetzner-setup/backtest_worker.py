@@ -104,6 +104,16 @@ def notify_user(notify_via, email, telegram_id, strategy_name, metrics, status, 
     """Send notification to user via their preferred method"""
     
     if status == 'completed':
+        # Handle 'Infinity' profit factor
+        profit_factor = metrics.get('profit_factor', 0)
+        if profit_factor == 'Infinity' or profit_factor == float('inf'):
+            profit_factor_display = "∞"
+        else:
+            try:
+                profit_factor_display = f"{float(profit_factor):.2f}x"
+            except (ValueError, TypeError):
+                profit_factor_display = "N/A"
+        
         # Telegram message
         telegram_msg = f"""
 🎉 *Backtest Complete!*
@@ -116,7 +126,7 @@ def notify_user(notify_via, email, telegram_id, strategy_name, metrics, status, 
 📉 Max Drawdown: {metrics.get('max_drawdown', 0)*100:.2f}%
 🎯 Win Rate: {metrics.get('win_rate', 0)*100:.2f}%
 💼 Total Trades: {metrics.get('total_trades', 0)}
-🏆 Profit Factor: {metrics.get('profit_factor', 0):.2f}x
+🏆 Profit Factor: {profit_factor_display}
 
 ✅ View results at algotcha.com
         """.strip()
@@ -133,7 +143,7 @@ def notify_user(notify_via, email, telegram_id, strategy_name, metrics, status, 
               <tr><td><strong>📉 Max Drawdown:</strong></td><td>{metrics.get('max_drawdown', 0)*100:.2f}%</td></tr>
               <tr><td><strong>🎯 Win Rate:</strong></td><td>{metrics.get('win_rate', 0)*100:.2f}%</td></tr>
               <tr><td><strong>💼 Total Trades:</strong></td><td>{metrics.get('total_trades', 0)}</td></tr>
-              <tr><td><strong>🏆 Profit Factor:</strong></td><td>{metrics.get('profit_factor', 0):.2f}x</td></tr>
+              <tr><td><strong>🏆 Profit Factor:</strong></td><td>{profit_factor_display}</td></tr>
             </table>
           </div>
           <p><a href="https://algotcha.com/backtest" style="display: inline-block; background: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px;">View Details</a></p>
@@ -228,7 +238,7 @@ def process_backtest(queue_item, conn):
                 float(metrics.get('sortino_ratio', 0)),
                 float(metrics.get('win_rate', 0)),
                 int(metrics.get('total_trades', 0)),
-                float(metrics.get('profit_factor', 0)),
+                float(metrics.get('profit_factor', 0)) if metrics.get('profit_factor') != 'Infinity' else 999.0,
                 float(metrics.get('yearly_return', 0)),
                 json.dumps(result_converted.get('chartData', {})),
                 user_id
