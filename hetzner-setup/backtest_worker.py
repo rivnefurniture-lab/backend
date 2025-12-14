@@ -162,6 +162,32 @@ def notify_user(notify_via, email, telegram_id, strategy_name, metrics, status, 
     if notify_via in ['email', 'both'] and email:
         send_email(email, email_subject, email_html)
 
+def estimate_backtest_duration(payload):
+    """Estimate how long a backtest will take based on parameters"""
+    num_pairs = len(payload.get('pairs', []))
+    
+    # Calculate date range in days
+    try:
+        start = datetime.strptime(payload.get('start_date', '2025-06-01'), '%Y-%m-%d')
+        end = datetime.strptime(payload.get('end_date', '2025-12-01'), '%Y-%m-%d')
+        days = (end - start).days
+    except:
+        days = 180
+    
+    # Count conditions
+    entry_conditions = len(payload.get('entry_conditions', []))
+    exit_conditions = len(payload.get('exit_conditions', []))
+    total_conditions = entry_conditions + exit_conditions + 1
+    
+    # Base time: ~3 seconds per pair per 30 days, scaled by conditions
+    base_seconds_per_pair = 3 * (days / 30) * (total_conditions / 2)
+    estimated_seconds = base_seconds_per_pair * num_pairs
+    
+    # Add overhead and clamp to reasonable range
+    estimated_seconds = max(10, min(estimated_seconds * 1.2, 600))  # 10s to 10min
+    
+    return int(estimated_seconds)
+
 def process_backtest(queue_item, conn):
     """Process a single backtest from the queue"""
     queue_id = queue_item[0]
@@ -174,22 +200,50 @@ def process_backtest(queue_item, conn):
     
     log(f"🚀 Processing backtest #{queue_id}: {strategy_name}")
     
-    # Update status to processing
+    # Parse payload first to estimate duration
+    payload = json.loads(payload_json)
+    estimated_duration = estimate_backtest_duration(payload)
+    log(f"📊 Estimated duration: {estimated_duration}s")
+    
+    # Update status to processing with estimated duration
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE "BacktestQueue" 
-        SET status = 'processing', "startedAt" = NOW(), progress = 0
+        SET status = 'processing', "startedAt" = NOW(), progress = 0, "estimatedSeconds" = %s
         WHERE id = %s
-    """, (queue_id,))
+    """, (estimated_duration, queue_id))
     conn.commit()
     
+    # Progress updater that runs in background
+    progress_stop = [False]
+    def update_progress():
+        while not progress_stop[0]:
+            try:
+                elapsed = time.time() - start_time
+                # Calculate progress based on elapsed vs estimated time
+                # Use logarithmic curve to slow down as we approach 100%
+                raw_progress = min(elapsed / estimated_duration, 0.99)
+                # Smoother curve: accelerate early, slow near end
+                progress = int(raw_progress * 95)  # Cap at 95% until actually done
+                
+                cursor.execute("""
+                    UPDATE "BacktestQueue" SET progress = %s WHERE id = %s
+                """, (progress, queue_id))
+                conn.commit()
+                log(f"   Progress: {progress}% ({int(elapsed)}s / ~{estimated_duration}s)")
+            except Exception as e:
+                log(f"   Progress update error: {e}")
+            time.sleep(5)  # Update every 5 seconds
+    
     try:
-        # Parse payload
-        payload = json.loads(payload_json)
-        
-        # Run backtest with timeout
+        # Start backtest
         log(f"⏳ Running backtest for {len(payload.get('pairs', []))} pairs... (timeout: {BACKTEST_TIMEOUT//60} min)")
         start_time = time.time()
+        
+        # Start progress updater in background thread
+        import threading
+        progress_thread = threading.Thread(target=update_progress, daemon=True)
+        progress_thread.start()
         
         # Use ThreadPoolExecutor with timeout
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -200,6 +254,8 @@ def process_backtest(queue_item, conn):
                 log(f"⚠️ Backtest timed out after {BACKTEST_TIMEOUT//60} minutes")
                 raise Exception(f"Backtest timed out after {BACKTEST_TIMEOUT//60} minutes")
         
+        # Stop progress updater
+        progress_stop[0] = True
         elapsed = time.time() - start_time
         
         if result.get('status') == 'success':

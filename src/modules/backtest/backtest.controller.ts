@@ -893,15 +893,17 @@ export class BacktestController {
         return [];
       }
 
-      // Calculate progress/estimates in memory without additional DB calls
+      // Use actual progress from DB (updated by worker) + calculate remaining time
       return user.backtestQueue.map((item, index) => {
-        let progress = 0;
-        let estimatedSeconds = 60; // Default estimate
-
-        if (item.status === 'processing' && item.startedAt) {
-          const elapsed = (Date.now() - item.startedAt.getTime()) / 1000;
-          progress = Math.min(95, elapsed / 60 * 100); // Assume ~60s per backtest
-          estimatedSeconds = Math.max(0, 60 - elapsed);
+        // Use actual progress from database (worker updates this)
+        const progress = item.progress || 0;
+        // Use estimated duration from database if available, otherwise default
+        const totalEstimated = (item as any).estimatedSeconds || 120;
+        
+        let estimatedRemaining = totalEstimated;
+        if (item.status === 'processing' && progress > 0) {
+          // Calculate remaining based on actual progress
+          estimatedRemaining = Math.max(5, totalEstimated * (1 - progress / 100));
         }
 
         return {
@@ -910,10 +912,12 @@ export class BacktestController {
           status: item.status,
           queuePosition: index + 1,
           progress,
-          estimatedSeconds,
-          estimatedCompletion: new Date(Date.now() + estimatedSeconds * 1000).toISOString(),
+          estimatedSeconds: totalEstimated,
+          estimatedRemaining,
+          estimatedCompletion: new Date(Date.now() + estimatedRemaining * 1000).toISOString(),
           startedAt: item.startedAt,
           createdAt: item.createdAt,
+          notifyVia: item.notifyVia,
         };
       });
     } catch (e) {

@@ -216,6 +216,7 @@ model BacktestQueue {
   status          String    @default("queued")  // queued, processing, completed, failed
   queuePosition   Int?
   progress        Int       @default(0)  // 0-100%
+  estimatedSeconds Int?     // Estimated duration in seconds
   
   // Notification preferences
   notifyVia       String    // "telegram", "email", or "both"
