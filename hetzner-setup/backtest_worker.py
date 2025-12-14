@@ -7,9 +7,14 @@ import os
 import sys
 import time
 import json
+import signal
 import psycopg2
 import requests
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+
+# Backtest timeout in seconds (2 hours)
+BACKTEST_TIMEOUT = 2 * 60 * 60
 
 # Add script directory to path for imports
 sys.path.insert(0, '/opt/algotcha/scripts')
@@ -172,10 +177,19 @@ def process_backtest(queue_item, conn):
         # Parse payload
         payload = json.loads(payload_json)
         
-        # Run backtest
-        log(f"⏳ Running backtest for {len(payload.get('pairs', []))} pairs...")
+        # Run backtest with timeout
+        log(f"⏳ Running backtest for {len(payload.get('pairs', []))} pairs... (timeout: {BACKTEST_TIMEOUT//60} min)")
         start_time = time.time()
-        result = backtest2.run_backtest(payload)
+        
+        # Use ThreadPoolExecutor with timeout
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(backtest2.run_backtest, payload)
+            try:
+                result = future.result(timeout=BACKTEST_TIMEOUT)
+            except FuturesTimeoutError:
+                log(f"⚠️ Backtest timed out after {BACKTEST_TIMEOUT//60} minutes")
+                raise Exception(f"Backtest timed out after {BACKTEST_TIMEOUT//60} minutes")
+        
         elapsed = time.time() - start_time
         
         if result.get('status') == 'success':

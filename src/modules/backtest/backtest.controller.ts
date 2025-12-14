@@ -645,6 +645,87 @@ export class BacktestController {
     return { success: true, message: 'Backtest cancelled' };
   }
 
+  // Admin endpoint to delete queue items
+  @UseGuards(JwtAuthGuard)
+  @Delete('queue/:id')
+  async deleteQueueItem(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
+    const userId = await this.getUserId(req);
+    const queueItem = await this.prisma.backtestQueue.findUnique({
+      where: { id: parseInt(id) },
+    });
+
+    if (!queueItem) {
+      return { error: 'Queue item not found' };
+    }
+
+    // Allow deletion of own items OR if status is failed/cancelled/completed
+    const canDelete = queueItem.userId === userId || 
+                      ['failed', 'cancelled', 'completed'].includes(queueItem.status);
+
+    if (!canDelete) {
+      return { error: 'Cannot delete this queue item - must be completed, failed, or cancelled' };
+    }
+
+    await this.prisma.backtestQueue.delete({
+      where: { id: parseInt(id) },
+    });
+
+    return { success: true, message: 'Queue item deleted' };
+  }
+
+  // Admin endpoint to force-fail stuck backtests
+  @UseGuards(JwtAuthGuard)
+  @Post('queue/:id/force-fail')
+  async forceFailBacktest(@Param('id') id: string) {
+    const queueItem = await this.prisma.backtestQueue.findUnique({
+      where: { id: parseInt(id) },
+    });
+
+    if (!queueItem) {
+      return { error: 'Queue item not found' };
+    }
+
+    if (!['queued', 'processing'].includes(queueItem.status)) {
+      return { error: 'Can only force-fail queued or processing backtests' };
+    }
+
+    await this.prisma.backtestQueue.update({
+      where: { id: parseInt(id) },
+      data: { 
+        status: 'failed', 
+        completedAt: new Date(),
+        errorMessage: 'Manually terminated by admin (stuck backtest)'
+      },
+    });
+
+    return { success: true, message: 'Backtest marked as failed' };
+  }
+
+  // Endpoint to reset stuck backtests (processing for more than 2 hours)
+  @UseGuards(JwtAuthGuard)
+  @Post('queue/reset-stuck')
+  async resetStuckBacktests() {
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    
+    const stuck = await this.prisma.backtestQueue.updateMany({
+      where: {
+        status: 'processing',
+        startedAt: { lt: twoHoursAgo },
+      },
+      data: {
+        status: 'failed',
+        completedAt: new Date(),
+        errorMessage: 'Auto-terminated: Processing exceeded 2 hour timeout',
+      },
+    });
+
+    return { 
+      success: true, 
+      message: `Reset ${stuck.count} stuck backtests`,
+      count: stuck.count 
+    };
+  }
+
   @UseGuards(JwtAuthGuard)
   @Get('limits')
   async getBacktestLimits(@Req() req: AuthenticatedRequest) {
