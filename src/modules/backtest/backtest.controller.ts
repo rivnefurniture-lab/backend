@@ -457,6 +457,17 @@ export class BacktestController {
     }
   }
 
+  // Debug endpoint - get all results without auth (temporary)
+  @Get('results-debug')
+  async getResultsDebug() {
+    try {
+      const results = await this.backtestService.getBacktestResults(undefined);
+      return { count: results.length, results };
+    } catch (error) {
+      return { error: error.message, stack: error.stack };
+    }
+  }
+
   @Get('results/:id')
   async getResult(@Param('id') id: string) {
     // Allow viewing any backtest result (no auth required for viewing)
