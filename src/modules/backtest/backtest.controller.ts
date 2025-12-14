@@ -769,43 +769,59 @@ export class BacktestController {
   }
 
   // Get detailed status for user's active backtest (for floating monitor)
+  // OPTIMIZED: Uses only 1 DB query to prevent connection pool exhaustion
   @UseGuards(JwtAuthGuard)
   @Get('queue/my-active')
   async getMyActiveBacktests(@Req() req: AuthenticatedRequest) {
     try {
-      const userId = await this.getUserId(req);
-      
-      const activeItems = await this.prisma.backtestQueue.findMany({
-        where: { 
-          userId,
-          status: { in: ['queued', 'processing'] },
+      // Get supabaseId directly from token - avoid extra DB call
+      const supabaseId = req.user?.sub;
+      if (!supabaseId) {
+        return [];
+      }
+
+      // Single query: get user and their active backtests in one go
+      const user = await this.prisma.user.findFirst({
+        where: { supabaseId },
+        select: {
+          id: true,
+          backtestQueue: {
+            where: { status: { in: ['queued', 'processing'] } },
+            orderBy: { createdAt: 'desc' },
+            take: 5, // Limit to 5 active backtests
+          },
         },
-        orderBy: { createdAt: 'desc' },
       });
 
-      const itemsWithDetails = await Promise.all(
-        activeItems.map(async (item) => {
-          const estimate = await this.queueService.getEstimatedCompletionTime(item.id);
-          const position = await this.queueService.getQueuePosition(item.id);
-          
-          return {
-            id: item.id,
-            strategyName: item.strategyName,
-            status: item.status,
-            queuePosition: position?.queuePosition || 0,
-            progress: estimate?.progress || 0,
-            estimatedSeconds: estimate?.estimatedSeconds || 0,
-            estimatedCompletion: estimate?.estimatedCompletion || null,
-            startedAt: item.startedAt,
-            createdAt: item.createdAt,
-          };
-        })
-      );
+      if (!user || !user.backtestQueue?.length) {
+        return [];
+      }
 
-      return itemsWithDetails;
+      // Calculate progress/estimates in memory without additional DB calls
+      return user.backtestQueue.map((item, index) => {
+        let progress = 0;
+        let estimatedSeconds = 60; // Default estimate
+
+        if (item.status === 'processing' && item.startedAt) {
+          const elapsed = (Date.now() - item.startedAt.getTime()) / 1000;
+          progress = Math.min(95, elapsed / 60 * 100); // Assume ~60s per backtest
+          estimatedSeconds = Math.max(0, 60 - elapsed);
+        }
+
+        return {
+          id: item.id,
+          strategyName: item.strategyName,
+          status: item.status,
+          queuePosition: index + 1,
+          progress,
+          estimatedSeconds,
+          estimatedCompletion: new Date(Date.now() + estimatedSeconds * 1000).toISOString(),
+          startedAt: item.startedAt,
+          createdAt: item.createdAt,
+        };
+      });
     } catch (e) {
-      // If user not found or any error, return empty array
-      console.log('getMyActiveBacktests error:', e.message);
+      // Silent fail - return empty array
       return [];
     }
   }
