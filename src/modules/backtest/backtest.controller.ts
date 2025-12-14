@@ -449,11 +449,11 @@ export class BacktestController {
     return this.backtestService.runBacktest(dto);
   }
 
-  @UseGuards(JwtAuthGuard)
   // Cache for backtest results (30 second TTL per user)
   private resultsCache = new Map<number, { data: any[]; timestamp: number }>();
   private readonly RESULTS_CACHE_TTL_MS = 30000; // 30 seconds
 
+  @UseGuards(JwtAuthGuard)
   @Get('results')
   async getResults(@Req() req: AuthenticatedRequest) {
     try {
