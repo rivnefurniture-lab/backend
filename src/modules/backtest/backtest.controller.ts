@@ -771,37 +771,43 @@ export class BacktestController {
   // Get detailed status for user's active backtest (for floating monitor)
   @UseGuards(JwtAuthGuard)
   @Get('queue/my-active')
-  async getMyActiveBacktests(@Req() req: any) {
-    const userId = req.user?.sub || req.user?.id;
-    
-    const activeItems = await this.prisma.backtestQueue.findMany({
-      where: { 
-        userId,
-        status: { in: ['queued', 'processing'] },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+  async getMyActiveBacktests(@Req() req: AuthenticatedRequest) {
+    try {
+      const userId = await this.getUserId(req);
+      
+      const activeItems = await this.prisma.backtestQueue.findMany({
+        where: { 
+          userId,
+          status: { in: ['queued', 'processing'] },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
 
-    const itemsWithDetails = await Promise.all(
-      activeItems.map(async (item) => {
-        const estimate = await this.queueService.getEstimatedCompletionTime(item.id);
-        const position = await this.queueService.getQueuePosition(item.id);
-        
-        return {
-          id: item.id,
-          strategyName: item.strategyName,
-          status: item.status,
-          queuePosition: position?.queuePosition || 0,
-          progress: estimate?.progress || 0,
-          estimatedSeconds: estimate?.estimatedSeconds || 0,
-          estimatedCompletion: estimate?.estimatedCompletion || null,
-          startedAt: item.startedAt,
-          createdAt: item.createdAt,
-        };
-      })
-    );
+      const itemsWithDetails = await Promise.all(
+        activeItems.map(async (item) => {
+          const estimate = await this.queueService.getEstimatedCompletionTime(item.id);
+          const position = await this.queueService.getQueuePosition(item.id);
+          
+          return {
+            id: item.id,
+            strategyName: item.strategyName,
+            status: item.status,
+            queuePosition: position?.queuePosition || 0,
+            progress: estimate?.progress || 0,
+            estimatedSeconds: estimate?.estimatedSeconds || 0,
+            estimatedCompletion: estimate?.estimatedCompletion || null,
+            startedAt: item.startedAt,
+            createdAt: item.createdAt,
+          };
+        })
+      );
 
-    return itemsWithDetails;
+      return itemsWithDetails;
+    } catch (e) {
+      // If user not found or any error, return empty array
+      console.log('getMyActiveBacktests error:', e.message);
+      return [];
+    }
   }
 
   // Admin analytics endpoint
