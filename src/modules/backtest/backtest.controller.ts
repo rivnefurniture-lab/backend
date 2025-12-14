@@ -42,33 +42,33 @@ export class BacktestController {
   private async getUserId(req: AuthenticatedRequest): Promise<number> {
     const supabaseId = req.user?.sub || '';
     const email = req.user?.email || '';
-
+    
     // Check cache first
     const cached = this.userIdCache.get(supabaseId);
     if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
       return cached.id;
     }
-
+    
     try {
       let user = await this.prisma.user.findFirst({
         where: { supabaseId },
         select: { id: true },
       });
-
+      
       if (!user && email) {
         user = await this.prisma.user.findUnique({
           where: { email },
           select: { id: true },
         });
       }
-
+      
       const userId = user?.id || 1;
-
+      
       // Cache the result
       if (supabaseId && userId !== 1) {
         this.userIdCache.set(supabaseId, { id: userId, timestamp: Date.now() });
       }
-
+      
       return userId;
     } catch (e) {
       // Return cached value if available as fallback
@@ -314,7 +314,7 @@ export class BacktestController {
         ],
         totalBacktestTrades: 206, // Total from CSV (206 BUY/SELL entries)
       };
-
+      
       let userStrategies: any[] = [];
       try {
         const dbStrategies = await this.prisma.strategy.findMany({
@@ -430,7 +430,7 @@ export class BacktestController {
     @Body() dto: RunBacktestDto,
   ) {
     const result = await this.backtestService.runBacktest(dto);
-
+    
     if (result.status === 'success') {
       const userId = await this.getUserId(req);
       const saved = await this.backtestService.saveBacktestResult(
@@ -440,7 +440,7 @@ export class BacktestController {
       );
       return { ...result, savedId: saved.id };
     }
-
+    
     return result;
   }
 
@@ -453,7 +453,7 @@ export class BacktestController {
   @Get('results')
   async getResults(@Req() req: AuthenticatedRequest) {
     try {
-      const userId = await this.getUserId(req);
+    const userId = await this.getUserId(req);
       console.log(`[getResults] Fetching results for userId: ${userId}`);
       const results = await this.backtestService.getBacktestResults(userId);
       console.log(`[getResults] Found ${results.length} results`);
@@ -473,11 +473,11 @@ export class BacktestController {
   @Get('results/:id/export/csv')
   async exportCSV(@Param('id') id: string, @Res() res: Response) {
     const result = await this.backtestService.getBacktestResult(parseInt(id));
-
+    
     if (!result || !result.trades) {
       return res.status(404).json({ error: 'Backtest result not found' });
     }
-
+    
     const headers = [
       'Date',
       'Time',
@@ -500,11 +500,11 @@ export class BacktestController {
         t.profit_percent || '0',
         t.profit_usd || '0',
         t.equity,
-        `"${t.reason || ''}"`,
+      `"${t.reason || ''}"`,
         `"${(t.indicatorProof || []).map((p: any) => `${p.indicator}: ${p.value}`).join('; ')}"`,
       ].join(','),
     );
-
+    
     const csv = [headers.join(','), ...rows].join('\n');
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader(
@@ -864,8 +864,12 @@ export class BacktestController {
     return itemsWithEstimates;
   }
 
+  // Simple in-memory cache for active backtests (5 second TTL per user)
+  private activeBacktestsCache = new Map<string, { data: any[]; timestamp: number }>();
+  private readonly CACHE_TTL_MS = 5000; // 5 seconds
+
   // Get detailed status for user's active backtest (for floating monitor)
-  // OPTIMIZED: Uses only 1 DB query to prevent connection pool exhaustion
+  // OPTIMIZED: Uses cache + single DB query to prevent connection pool exhaustion
   @UseGuards(JwtAuthGuard)
   @Get('queue/my-active')
   async getMyActiveBacktests(@Req() req: AuthenticatedRequest) {
@@ -874,6 +878,12 @@ export class BacktestController {
       const supabaseId = req.user?.sub;
       if (!supabaseId) {
         return [];
+      }
+
+      // Check cache first
+      const cached = this.activeBacktestsCache.get(supabaseId);
+      if (cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS) {
+        return cached.data;
       }
 
       // Single query: get user and their active backtests in one go
@@ -890,11 +900,12 @@ export class BacktestController {
       });
 
       if (!user || !user.backtestQueue?.length) {
+        this.activeBacktestsCache.set(supabaseId, { data: [], timestamp: Date.now() });
         return [];
       }
 
       // Use actual progress from DB (updated by worker) + calculate remaining time
-      return user.backtestQueue.map((item, index) => {
+      const result = user.backtestQueue.map((item, index) => {
         // Use actual progress from database (worker updates this)
         const progress = item.progress || 0;
         // Use estimated duration from database if available, otherwise default
@@ -920,8 +931,12 @@ export class BacktestController {
           notifyVia: item.notifyVia,
         };
       });
+
+      // Cache the result
+      this.activeBacktestsCache.set(supabaseId, { data: result, timestamp: Date.now() });
+      return result;
     } catch (e) {
-      // Silent fail - return empty array
+      // Silent fail - return empty array (don't crash on DB errors)
       return [];
     }
   }
