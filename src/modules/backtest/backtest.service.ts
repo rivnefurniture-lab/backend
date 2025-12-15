@@ -1008,16 +1008,19 @@ print(json.dumps(result))
 
   // Manual data update trigger
   async triggerDataUpdate() {
-    if (this.isUpdatingData) {
-      return { status: 'busy', message: 'Data update already in progress' };
-    }
+    // DISABLED: Data updates happen on Contabo, not Railway
+    return { status: 'disabled', message: 'Data updates are handled by Contabo server. Use the data update endpoint there.' };
+    
+    // if (this.isUpdatingData) {
+    //   return { status: 'busy', message: 'Data update already in progress' };
+    // }
 
-    // Run in background
-    this.updateDataHourly().catch((e) =>
-      this.logger.error(`Update failed: ${e.message}`),
-    );
+    // // Run in background
+    // this.updateDataHourly().catch((e) =>
+    //   this.logger.error(`Update failed: ${e.message}`),
+    // );
 
-    return { status: 'started', message: 'Data update started in background' };
+    // return { status: 'started', message: 'Data update started in background' };
   }
 
   // Check data status
