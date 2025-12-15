@@ -1,109 +1,167 @@
 // src/modules/payments/payments.service.ts
 import { Injectable } from '@nestjs/common';
+import * as crypto from 'crypto';
 
-type PlanId = 'starter' | 'pro' | 'elite';
+type PlanId = 'free' | 'pro' | 'enterprise';
+type Billing = 'monthly' | 'yearly';
 
 @Injectable()
 export class PaymentsService {
   private readonly FRONTEND_URL =
-    process.env.FRONTEND_URL || 'http://localhost:3000';
+    process.env.FRONTEND_URL || 'https://algotcha.com';
 
-  private readonly PRICE_MAP: Record<PlanId, number> = {
-    starter: 9,
-    pro: 29,
-    elite: 79,
+  private readonly LIQPAY_PUBLIC_KEY = process.env.LIQPAY_PUBLIC_KEY || '';
+  private readonly LIQPAY_PRIVATE_KEY = process.env.LIQPAY_PRIVATE_KEY || '';
+
+  private readonly PRICE_MAP: Record<PlanId, { monthly: number; yearly: number }> = {
+    free: { monthly: 0, yearly: 0 },
+    pro: { monthly: 29, yearly: 23 },
+    enterprise: { monthly: 99, yearly: 79 },
   };
 
-  // ==================== DIRECT CRYPTO (Manual) ====================
-  // This is the simplest approach - user sends crypto to your wallet
-  // You manually verify and activate their subscription
-  async createCryptoPayment(planId: PlanId = 'starter', userEmail?: string) {
-    const amount = this.PRICE_MAP[planId];
-    const walletAddressUSDT = process.env.CRYPTO_WALLET_USDT;
-    const walletAddressBTC = process.env.CRYPTO_WALLET_BTC;
-    const walletAddressETH = process.env.CRYPTO_WALLET_ETH;
+  // ==================== LIQPAY ====================
+  /**
+   * Create LiqPay payment
+   * Official docs: https://www.liqpay.ua/documentation/api/aquiring/checkout/doc
+   */
+  async createLiqPayPayment(
+    planId: PlanId = 'pro',
+    billing: Billing = 'monthly',
+    userEmail?: string,
+  ) {
+    const priceConfig = this.PRICE_MAP[planId];
+    const amount = billing === 'yearly' ? priceConfig.yearly : priceConfig.monthly;
+
+    if (amount === 0) {
+      throw new Error('Cannot create payment for free plan');
+    }
+
+    // Generate unique order_id
+    const orderId = `algotcha_${planId}_${billing}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    // LiqPay payment parameters
+    const params = {
+      public_key: this.LIQPAY_PUBLIC_KEY,
+      version: '3',
+      action: 'pay',
+      amount: amount,
+      currency: 'USD',
+      description: `Algotcha ${planId.toUpperCase()} - ${billing === 'yearly' ? 'Annual' : 'Monthly'} Subscription`,
+      order_id: orderId,
+      result_url: `${this.FRONTEND_URL}/pay-success?plan=${planId}&billing=${billing}`,
+      server_url: `${process.env.BACKEND_URL || 'https://algotcha-api-prod.up.railway.app'}/pay/liqpay/callback`,
+      language: 'uk', // Default to Ukrainian per LiqPay requirements
+      ...(userEmail && { customer_email: userEmail }),
+      // Additional parameters
+      product_name: `Algotcha ${planId.toUpperCase()}`,
+      product_category: 'software',
+      product_description: `Trading strategy backtest platform subscription`,
+      expired_date: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours expiry
+    };
+
+    // Generate signature
+    const data = Buffer.from(JSON.stringify(params)).toString('base64');
+    const signature = this.generateLiqPaySignature(data);
+
+    // LiqPay checkout URL
+    const checkoutUrl = `https://www.liqpay.ua/api/3/checkout?data=${encodeURIComponent(data)}&signature=${signature}`;
 
     return {
-      provider: 'crypto',
-      plan: planId,
+      provider: 'liqpay',
+      checkoutUrl,
+      orderId,
       amount,
-      options: [
-        {
-          currency: 'USDT',
-          network: 'TRC20',
-          address: walletAddressUSDT || 'Contact support for address',
-          amount: amount.toFixed(2),
-        },
-        {
-          currency: 'USDT',
-          network: 'ERC20',
-          address: walletAddressETH || 'Contact support for address',
-          amount: amount.toFixed(2),
-        },
-        {
-          currency: 'BTC',
-          network: 'Bitcoin',
-          address: walletAddressBTC || 'Contact support for address',
-          amount: (amount / 100000).toFixed(8), // Approximate BTC conversion
-          note: 'BTC amount may vary based on current rate',
-        },
-        {
-          currency: 'ETH',
-          network: 'Ethereum',
-          address: walletAddressETH || 'Contact support for address',
-          amount: (amount / 4000).toFixed(6), // Approximate ETH conversion
-          note: 'ETH amount may vary based on current rate',
-        },
-      ],
-      instructions: [
-        '1. Choose your preferred cryptocurrency',
-        '2. Send the exact amount to the provided address',
-        '3. Save the transaction hash',
-        '4. Email support@algotcha.com with your transaction hash and email',
-        '5. Your subscription will be activated within 24 hours',
-      ],
-      supportEmail: 'support@algotcha.com',
-      returnUrl: `${this.FRONTEND_URL}/pay-success?plan=${planId}`,
+      currency: 'USD',
+      data,
+      signature,
+      // Alternative: return HTML form for embedded checkout
+      formHtml: this.generateLiqPayForm(data, signature),
     };
+  }
+
+  /**
+   * Generate LiqPay signature
+   * Formula: base64_encode(sha1(private_key + data + private_key))
+   */
+  private generateLiqPaySignature(data: string): string {
+    const signString = this.LIQPAY_PRIVATE_KEY + data + this.LIQPAY_PRIVATE_KEY;
+    return crypto.createHash('sha1').update(signString).digest('base64');
+  }
+
+  /**
+   * Generate LiqPay HTML form for embedded checkout
+   */
+  private generateLiqPayForm(data: string, signature: string): string {
+    return `
+      <form method="POST" action="https://www.liqpay.ua/api/3/checkout" accept-charset="utf-8">
+        <input type="hidden" name="data" value="${data}" />
+        <input type="hidden" name="signature" value="${signature}" />
+      </form>
+    `;
+  }
+
+  /**
+   * Verify LiqPay callback signature
+   */
+  verifyLiqPayCallback(data: string, signature: string): boolean {
+    const expectedSignature = this.generateLiqPaySignature(data);
+    return signature === expectedSignature;
+  }
+
+  /**
+   * Decode LiqPay callback data
+   */
+  decodeLiqPayData(data: string): any {
+    try {
+      const decoded = Buffer.from(data, 'base64').toString('utf-8');
+      return JSON.parse(decoded);
+    } catch (e) {
+      throw new Error('Invalid LiqPay data');
+    }
   }
 
   // Get plan details
   getPlanDetails(planId: PlanId) {
     const plans = {
-      starter: {
-        name: 'Starter',
-        price: 9,
+      free: {
+        name: 'Free',
+        priceMonthly: 0,
+        priceYearly: 0,
         features: [
-          '5 Strategy Backtests/month',
-          '1 Live Trading Strategy',
+          '3 Backtests per day',
+          '1 Active Strategy',
           'Basic Indicators',
-          'Email Support',
+          'Community Support',
         ],
       },
       pro: {
         name: 'Pro',
-        price: 29,
+        priceMonthly: 29,
+        priceYearly: 23,
         features: [
           'Unlimited Backtests',
-          '5 Live Trading Strategies',
-          'All Indicators',
+          '5 Active Strategies',
+          'All 20+ Indicators',
           'Priority Support',
-          'Custom Alerts',
+          'Report Exports',
+          'Telegram/Email Alerts',
         ],
       },
-      elite: {
-        name: 'Elite',
-        price: 79,
+      enterprise: {
+        name: 'Enterprise',
+        priceMonthly: 99,
+        priceYearly: 79,
         features: [
-          'Unlimited Everything',
-          'Unlimited Live Strategies',
+          'Everything in Pro',
+          'Unlimited Strategies',
+          'Dedicated Server',
+          'Personal Manager',
           'API Access',
-          'VIP Support',
-          'Custom Strategy Development',
+          'White-label Options',
         ],
       },
     };
 
-    return plans[planId] || plans.starter;
+    return plans[planId] || plans.pro;
   }
 }
