@@ -127,29 +127,29 @@ export class BacktestService {
     }
   }
 
-  // Run hourly data update
-  @Cron(CronExpression.EVERY_HOUR)
-  async updateDataHourly() {
-    if (this.isUpdatingData) {
-      this.logger.log('Data update already in progress, skipping...');
-      return;
-    }
+  // Run hourly data update - DISABLED: Data updates happen on Contabo server, not Railway
+  // @Cron(CronExpression.EVERY_HOUR)
+  // async updateDataHourly() {
+  //   if (this.isUpdatingData) {
+  //     this.logger.log('Data update already in progress, skipping...');
+  //     return;
+  //   }
 
-    this.isUpdatingData = true;
-    this.logger.log('Starting hourly data update...');
+  //   this.isUpdatingData = true;
+  //   this.logger.log('Starting hourly data update...');
 
-    try {
-      await this.runPythonScript('update_data.py');
-      this.logger.log('Hourly data update completed');
+  //   try {
+  //     await this.runPythonScript('update_data.py');
+  //     this.logger.log('Hourly data update completed');
 
-      // Recalculate preset strategies after data update
-      await this.calculateAllPresetStrategies();
-    } catch (error) {
-      this.logger.error(`Data update failed: ${error.message}`);
-    } finally {
-      this.isUpdatingData = false;
-    }
-  }
+  //     // Recalculate preset strategies after data update
+  //     await this.calculateAllPresetStrategies();
+  //   } catch (error) {
+  //     this.logger.error(`Data update failed: ${error.message}`);
+  //   } finally {
+  //     this.isUpdatingData = false;
+  //   }
+  // }
 
   // Calculate all preset strategies
   async calculateAllPresetStrategies() {

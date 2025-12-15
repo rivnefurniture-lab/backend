@@ -95,6 +95,9 @@ model Strategy {
   user        User     @relation(fields: [userId], references: [id])
   runs        StrategyRun[]
   backtests   BacktestResult[]
+  
+  @@index([isPublic, lastBacktestProfit])
+  @@index([isPublic, updatedAt])
 }
 
 model StrategyRun {
@@ -179,6 +182,9 @@ model BacktestResult {
   user        User     @relation(fields: [userId], references: [id])
   strategyId  Int?
   strategy    Strategy? @relation(fields: [strategyId], references: [id])
+  
+  @@index([userId, createdAt])
+  @@index([netProfitUsd, totalTrades, sharpeRatio])
 }
 
 model Comment {
