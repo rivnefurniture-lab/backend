@@ -89,8 +89,17 @@ export class BacktestController {
     return this.backtestService.getStrategyTemplates();
   }
 
+  // Cache for public strategies (60 second TTL - data doesn't change often)
+  private strategiesListCache: { data: any[]; timestamp: number } | null = null;
+  private readonly STRATEGIES_LIST_CACHE_TTL = 60000; // 60 seconds
+
   @Get('strategies')
   async getAllStrategies() {
+    // Check cache first
+    if (this.strategiesListCache && Date.now() - this.strategiesListCache.timestamp < this.STRATEGIES_LIST_CACHE_TTL) {
+      return this.strategiesListCache.data;
+    }
+
     try {
       // Real backtest data from 2023-2025 with actual trades and yearly breakdown
       const realBacktest = {
@@ -405,7 +414,12 @@ export class BacktestController {
       }
 
       // Return real backtest first, then database backtests, then user strategies
-      return [realBacktest, ...dbBacktests, ...userStrategies];
+      const result = [realBacktest, ...dbBacktests, ...userStrategies];
+      
+      // Cache the result
+      this.strategiesListCache = { data: result, timestamp: Date.now() };
+      
+      return result;
     } catch (error) {
       console.error('Failed to load strategies:', error.message);
       // Fallback to just the real backtest if everything fails

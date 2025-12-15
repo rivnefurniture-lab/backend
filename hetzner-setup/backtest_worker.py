@@ -270,18 +270,20 @@ def process_backtest(queue_item, conn):
             log(f"   Win Rate: {metrics.get('win_rate', 0)*100:.2f}%")
             log(f"   Total Trades: {metrics.get('total_trades', 0)}")
             
-            # Extract trades from df_out (only sell/exit actions represent completed trades)
+            # Extract ALL trades from df_out (both BUY and SELL)
             trades = []
             df_out = result_converted.get('df_out', [])
             if isinstance(df_out, list) and df_out:
                 for record in df_out:
                     action = str(record.get('action', '')).lower()
-                    if 'sell' in action or 'exit' in action:
+                    # Only include actual trade actions (buy/sell), skip "hold" or empty actions
+                    if action and action != 'hold':
                         trade = {
                             'timestamp': str(record.get('timestamp', '')),
                             'symbol': record.get('symbol', ''),
                             'action': record.get('action', ''),
                             'price': record.get('price', 0),
+                            'order_size': record.get('order_size', 0),  # Include order_size for reinvest tracking
                             'profit_loss': record.get('profit_loss', 0),
                             'balance': record.get('real_balance', 0),
                             'trade_id': record.get('trade_id', ''),
