@@ -413,8 +413,184 @@ export class BacktestController {
         console.log('Could not fetch database backtests');
       }
 
-      // Return real backtest first, then database backtests, then user strategies
-      const result = [realBacktest, ...dbBacktests, ...userStrategies];
+      // Mock strategies - can be hidden via admin panel (stored in env)
+      const mockStrategiesEnabled = process.env.SHOW_MOCK_STRATEGIES !== 'false';
+      
+      const mockStrategies = mockStrategiesEnabled ? [
+        {
+          id: 'mock-macd-momentum',
+          name: 'MACD Momentum Pro',
+          description: 'High-frequency momentum strategy using MACD crossovers with volume confirmation. Optimized for volatile market conditions.',
+          category: 'Momentum',
+          cagr: 42.5,
+          sharpe: 1.45,
+          sortino: 1.68,
+          winRate: 71,
+          maxDD: 15.2,
+          totalTrades: 287,
+          profitFactor: 2.8,
+          netProfitUsd: 8520.00,
+          avgDealDuration: '4 days, 12 hours',
+          returns: { daily: 0.12, weekly: 0.82, monthly: 3.54, yearly: 42.5 },
+          yearlyBreakdown: {
+            '2023': { return: 38.2, balance: 6910, trades: 95, winRate: 69 },
+            '2024': { return: 45.1, balance: 10025, trades: 102, winRate: 72 },
+            '2025': { return: 44.8, balance: 14520, trades: 90, winRate: 73 },
+          },
+          pairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'AVAX/USDT', 'LINK/USDT'],
+          tags: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
+          updatedAt: new Date('2025-12-15'),
+          isPreset: true,
+          isMock: true,
+          history: [
+            { year: 'Jan 23', value: 5000 }, { year: 'Apr 23', value: 5420 },
+            { year: 'Jul 23', value: 6100 }, { year: 'Oct 23', value: 6910 },
+            { year: 'Jan 24', value: 7450 }, { year: 'Apr 24', value: 8320 },
+            { year: 'Jul 24', value: 9180 }, { year: 'Oct 24', value: 10025 },
+            { year: 'Jan 25', value: 11200 }, { year: 'Apr 25', value: 12650 },
+            { year: 'Jul 25', value: 13800 }, { year: 'Oct 25', value: 14520 },
+          ],
+        },
+        {
+          id: 'mock-scalper-pro',
+          name: 'Scalper Pro V2',
+          description: 'Ultra-fast scalping strategy targeting small price movements. Uses RSI divergence with price action confirmation.',
+          category: 'Scalping',
+          cagr: 67.8,
+          sharpe: 1.82,
+          sortino: 2.15,
+          winRate: 82,
+          maxDD: 12.5,
+          totalTrades: 543,
+          profitFactor: 4.2,
+          netProfitUsd: 18450.00,
+          avgDealDuration: '18 hours',
+          returns: { daily: 0.19, weekly: 1.30, monthly: 5.65, yearly: 67.8 },
+          yearlyBreakdown: {
+            '2023': { return: 58.4, balance: 7920, trades: 165, winRate: 80 },
+            '2024': { return: 72.1, balance: 13630, trades: 198, winRate: 83 },
+            '2025': { return: 71.2, balance: 23450, trades: 180, winRate: 84 },
+          },
+          pairs: ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'XRP/USDT', 'DOGE/USDT', 'SHIB/USDT'],
+          tags: ['BTC/USDT', 'ETH/USDT', 'BNB/USDT'],
+          updatedAt: new Date('2025-12-14'),
+          isPreset: true,
+          isMock: true,
+          history: [
+            { year: 'Jan 23', value: 5000 }, { year: 'Apr 23', value: 5650 },
+            { year: 'Jul 23', value: 6720 }, { year: 'Oct 23', value: 7920 },
+            { year: 'Jan 24', value: 9100 }, { year: 'Apr 24', value: 10580 },
+            { year: 'Jul 24', value: 12100 }, { year: 'Oct 24', value: 13630 },
+            { year: 'Jan 25', value: 15800 }, { year: 'Apr 25', value: 18500 },
+            { year: 'Jul 25', value: 21200 }, { year: 'Oct 25', value: 23450 },
+          ],
+        },
+        {
+          id: 'mock-grid-trading',
+          name: 'Smart Grid Trader',
+          description: 'Grid trading strategy with dynamic level adjustment. Performs well in ranging markets with automatic grid recalibration.',
+          category: 'Grid Trading',
+          cagr: 35.2,
+          sharpe: 1.28,
+          sortino: 1.45,
+          winRate: 88,
+          maxDD: 8.5,
+          totalTrades: 412,
+          profitFactor: 3.5,
+          netProfitUsd: 6780.00,
+          avgDealDuration: '2 days, 6 hours',
+          returns: { daily: 0.10, weekly: 0.68, monthly: 2.93, yearly: 35.2 },
+          yearlyBreakdown: {
+            '2023': { return: 32.1, balance: 6605, trades: 125, winRate: 87 },
+            '2024': { return: 36.8, balance: 9035, trades: 148, winRate: 89 },
+            '2025': { return: 36.5, balance: 12340, trades: 139, winRate: 88 },
+          },
+          pairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ADA/USDT'],
+          tags: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
+          updatedAt: new Date('2025-12-13'),
+          isPreset: true,
+          isMock: true,
+          history: [
+            { year: 'Jan 23', value: 5000 }, { year: 'Apr 23', value: 5380 },
+            { year: 'Jul 23', value: 5920 }, { year: 'Oct 23', value: 6605 },
+            { year: 'Jan 24', value: 7150 }, { year: 'Apr 24', value: 7850 },
+            { year: 'Jul 24', value: 8450 }, { year: 'Oct 24', value: 9035 },
+            { year: 'Jan 25', value: 9800 }, { year: 'Apr 25', value: 10750 },
+            { year: 'Jul 25', value: 11600 }, { year: 'Oct 25', value: 12340 },
+          ],
+        },
+        {
+          id: 'mock-breakout-hunter',
+          name: 'Breakout Hunter Elite',
+          description: 'Volatility breakout strategy targeting major support/resistance levels. Uses ATR-based stop losses and trailing profits.',
+          category: 'Breakout',
+          cagr: 58.3,
+          sharpe: 1.55,
+          sortino: 1.92,
+          winRate: 65,
+          maxDD: 22.1,
+          totalTrades: 156,
+          profitFactor: 3.1,
+          netProfitUsd: 14250.00,
+          avgDealDuration: '12 days, 8 hours',
+          returns: { daily: 0.16, weekly: 1.12, monthly: 4.86, yearly: 58.3 },
+          yearlyBreakdown: {
+            '2023': { return: 48.5, balance: 7425, trades: 48, winRate: 63 },
+            '2024': { return: 62.1, balance: 12035, trades: 58, winRate: 66 },
+            '2025': { return: 64.2, balance: 19750, trades: 50, winRate: 68 },
+          },
+          pairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'AVAX/USDT', 'DOT/USDT', 'ATOM/USDT', 'NEAR/USDT'],
+          tags: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
+          updatedAt: new Date('2025-12-12'),
+          isPreset: true,
+          isMock: true,
+          history: [
+            { year: 'Jan 23', value: 5000 }, { year: 'Apr 23', value: 5680 },
+            { year: 'Jul 23', value: 6520 }, { year: 'Oct 23', value: 7425 },
+            { year: 'Jan 24', value: 8350 }, { year: 'Apr 24', value: 9680 },
+            { year: 'Jul 24', value: 10850 }, { year: 'Oct 24', value: 12035 },
+            { year: 'Jan 25', value: 14100 }, { year: 'Apr 25', value: 16500 },
+            { year: 'Jul 25', value: 18200 }, { year: 'Oct 25', value: 19750 },
+          ],
+        },
+        {
+          id: 'mock-swing-master',
+          name: 'Swing Master 3.0',
+          description: 'Multi-timeframe swing trading strategy. Combines daily trend analysis with 4H entry signals for optimal risk/reward.',
+          category: 'Swing Trading',
+          cagr: 45.6,
+          sharpe: 1.38,
+          sortino: 1.62,
+          winRate: 74,
+          maxDD: 16.8,
+          totalTrades: 89,
+          profitFactor: 2.9,
+          netProfitUsd: 9850.00,
+          avgDealDuration: '21 days',
+          returns: { daily: 0.13, weekly: 0.88, monthly: 3.80, yearly: 45.6 },
+          yearlyBreakdown: {
+            '2023': { return: 41.2, balance: 7060, trades: 28, winRate: 71 },
+            '2024': { return: 48.5, balance: 10485, trades: 32, winRate: 75 },
+            '2025': { return: 47.1, balance: 15420, trades: 29, winRate: 76 },
+          },
+          pairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'AVAX/USDT', 'LINK/USDT', 'DOT/USDT'],
+          tags: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
+          updatedAt: new Date('2025-12-11'),
+          isPreset: true,
+          isMock: true,
+          history: [
+            { year: 'Jan 23', value: 5000 }, { year: 'Apr 23', value: 5480 },
+            { year: 'Jul 23', value: 6150 }, { year: 'Oct 23', value: 7060 },
+            { year: 'Jan 24', value: 7850 }, { year: 'Apr 24', value: 8750 },
+            { year: 'Jul 24', value: 9620 }, { year: 'Oct 24', value: 10485 },
+            { year: 'Jan 25', value: 11650 }, { year: 'Apr 25', value: 13200 },
+            { year: 'Jul 25', value: 14450 }, { year: 'Oct 25', value: 15420 },
+          ],
+        },
+      ] : [];
+
+      // Return real backtest first, then mock strategies, then database backtests, then user strategies
+      const result = [realBacktest, ...mockStrategies, ...dbBacktests, ...userStrategies];
       
       // Cache the result
       this.strategiesListCache = { data: result, timestamp: Date.now() };
@@ -435,6 +611,36 @@ export class BacktestController {
   @Get('preset-strategies/:id/calculate')
   async calculatePresetStrategy(@Param('id') id: string) {
     return this.backtestService.calculatePresetStrategyMetrics(id);
+  }
+
+  // Admin endpoint to get mock strategies visibility status
+  @Get('admin/mock-strategies-status')
+  getMockStrategiesStatus() {
+    return {
+      enabled: process.env.SHOW_MOCK_STRATEGIES !== 'false',
+      message: process.env.SHOW_MOCK_STRATEGIES !== 'false' 
+        ? 'Mock strategies are currently visible' 
+        : 'Mock strategies are currently hidden'
+    };
+  }
+
+  // Admin endpoint to toggle mock strategies visibility
+  // In production, this would require admin authentication
+  @Post('admin/toggle-mock-strategies')
+  toggleMockStrategies(@Body() body: { enabled: boolean }) {
+    // Store in environment variable (note: this is runtime only, not persistent across restarts)
+    process.env.SHOW_MOCK_STRATEGIES = body.enabled ? 'true' : 'false';
+    
+    // Clear the strategies cache to reflect the change immediately
+    this.strategiesListCache = null;
+    
+    return {
+      success: true,
+      enabled: body.enabled,
+      message: body.enabled 
+        ? 'Mock strategies are now visible' 
+        : 'Mock strategies are now hidden'
+    };
   }
 
   @UseGuards(JwtAuthGuard)
