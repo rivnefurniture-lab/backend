@@ -1,7 +1,7 @@
 // src/modules/payments/payments.controller.ts
 import { Controller, Post, Get, Body, Param, Req, Res, HttpStatus, Logger } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
-import { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 
 type PlanId = 'free' | 'pro' | 'enterprise';
 type Billing = 'monthly' | 'yearly';
