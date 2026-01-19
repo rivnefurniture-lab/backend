@@ -6,9 +6,10 @@ import { StrategySchedulerService } from './strategy-scheduler.service';
 import { QueueService } from './queue.service';
 import { NotificationService } from './notification.service';
 import { PrismaModule } from '../../prisma/prisma.module';
+import { SubscriptionModule } from '../subscription/subscription.module';
 
 @Module({
-  imports: [PrismaModule, ScheduleModule.forRoot()],
+  imports: [PrismaModule, ScheduleModule.forRoot(), SubscriptionModule],
   controllers: [BacktestController],
   providers: [
     BacktestService,

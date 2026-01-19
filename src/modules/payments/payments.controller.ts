@@ -1,7 +1,9 @@
 // src/modules/payments/payments.controller.ts
-import { Controller, Post, Get, Body, Param, Req, Res, HttpStatus, Logger } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param, Res, HttpStatus, Logger } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
-import type { Request, Response } from 'express';
+import { PrismaService } from '../../prisma/prisma.service';
+import { SubscriptionService, PlanType } from '../subscription/subscription.service';
+import type { Response } from 'express';
 
 type PlanId = 'free' | 'pro' | 'enterprise';
 type Billing = 'monthly' | 'yearly';
@@ -22,7 +24,11 @@ interface LiqPayCallbackBody {
 export class PaymentsController {
   private readonly logger = new Logger(PaymentsController.name);
 
-  constructor(private readonly payments: PaymentsService) {}
+  constructor(
+    private readonly payments: PaymentsService,
+    private readonly prisma: PrismaService,
+    private readonly subscriptionService: SubscriptionService,
+  ) {}
 
   // ==================== LIQPAY ====================
   
@@ -75,23 +81,37 @@ export class PaymentsController {
       // Check payment status
       const { status, order_id, amount, currency, transaction_id } = paymentData;
 
-      if (status === 'success') {
+      if (status === 'success' || status === 'sandbox') {
         // Payment successful - activate subscription
         this.logger.log(`Payment successful: Order ${order_id}, Amount: ${amount} ${currency}, TxID: ${transaction_id}`);
         
-        // TODO: Update user subscription in database
         // Extract plan and billing from order_id (format: algotcha_pro_monthly_timestamp_random)
         const parts = order_id.split('_');
         if (parts.length >= 3) {
-          const planId = parts[1];
-          const billing = parts[2];
+          const planId = parts[1] as PlanType;
+          const billing = parts[2] as Billing;
           const userEmail = paymentData.customer_email;
           
           this.logger.log(`Activating ${planId} ${billing} subscription for ${userEmail}`);
           
-          // TODO: Implement subscription activation logic
-          // Example:
-          // await this.userService.activateSubscription(userEmail, planId, billing);
+          // Find user by email and activate subscription
+          if (userEmail) {
+            try {
+              const user = await this.prisma.user.findUnique({
+                where: { email: userEmail },
+              });
+              
+              if (user) {
+                const durationMonths = billing === 'yearly' ? 12 : 1;
+                await this.subscriptionService.updateSubscription(user.id, planId, durationMonths);
+                this.logger.log(`Subscription activated for user ${user.id} (${userEmail}): ${planId} for ${durationMonths} months`);
+              } else {
+                this.logger.warn(`User not found for email: ${userEmail}`);
+              }
+            } catch (err) {
+              this.logger.error(`Failed to activate subscription: ${err.message}`);
+            }
+          }
         }
       } else if (status === 'failure') {
         this.logger.warn(`Payment failed: Order ${order_id}`);

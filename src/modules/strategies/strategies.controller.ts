@@ -13,6 +13,7 @@ import { StrategiesService } from './strategies.service';
 import { ExchangeService } from '../exchange/exchange.service';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 import { PrismaService } from '../../prisma/prisma.service';
+import { SubscriptionService } from '../subscription/subscription.service';
 
 interface JwtUser {
   sub: string; // Supabase uses UUID strings
@@ -34,6 +35,7 @@ export class StrategiesController {
     private readonly strategies: StrategiesService,
     private readonly exchange: ExchangeService,
     private readonly prisma: PrismaService,
+    private readonly subscriptionService: SubscriptionService,
   ) {}
 
   // Get the supabase UUID from JWT
@@ -238,6 +240,18 @@ export class StrategiesController {
   ) {
     try {
       const userId = await this.getUserId(req);
+      
+      // Check subscription limits
+      const canSave = await this.subscriptionService.canSaveStrategy(userId);
+      if (!canSave.allowed) {
+        return {
+          success: false,
+          error: canSave.reason,
+          limitReached: true,
+          upgrade: '/pricing',
+        };
+      }
+
       const strategy = await this.strategies.saveStrategy(userId, body);
       return {
         success: true,

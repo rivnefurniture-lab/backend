@@ -15,6 +15,7 @@ import { RunBacktestDto } from './dto/backtest.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 import { PrismaService } from '../../prisma/prisma.service';
 import { QueueService } from './queue.service';
+import { SubscriptionService } from '../subscription/subscription.service';
 
 interface JwtUser {
   sub: string; // Supabase UUID
@@ -36,6 +37,7 @@ export class BacktestController {
     private readonly backtestService: BacktestService,
     private readonly prisma: PrismaService,
     private readonly queueService: QueueService,
+    private readonly subscriptionService: SubscriptionService,
   ) {}
 
   // Resolve Supabase UUID to database user ID (with caching)
@@ -752,6 +754,17 @@ export class BacktestController {
     body: { payload: RunBacktestDto; notifyVia: 'telegram' | 'email' | 'both' },
   ) {
     const userId = await this.getUserId(req);
+    
+    // Check subscription limits
+    const canBacktest = await this.subscriptionService.canRunBacktest(userId);
+    if (!canBacktest.allowed) {
+      return { 
+        error: canBacktest.reason,
+        limitReached: true,
+        upgrade: '/pricing',
+      };
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { email: true, telegramId: true },

@@ -10,6 +10,7 @@ import { TradesModule } from './modules/trades/trades.module';
 import { RefundModule } from './modules/refund/refund.module';
 import { UserModule } from './modules/user/user.module';
 import { HetznerModule } from './modules/hetzner/hetzner.module';
+import { SubscriptionModule } from './modules/subscription/subscription.module';
 import { ConfigModule } from '@nestjs/config';
 import { HealthController } from './health.controller';
 
@@ -27,6 +28,7 @@ import { HealthController } from './health.controller';
     RefundModule,
     UserModule,
     AuthModule,
+    SubscriptionModule,
   ],
   controllers: [HealthController],
 })
