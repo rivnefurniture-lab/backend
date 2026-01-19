@@ -19,19 +19,18 @@ DATA_DIR = '/opt/algotcha/data/stocks'
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # Stock symbols to fetch - matching frontend config
+# Only symbols with verified Yahoo Finance data
 STOCK_SYMBOLS = [
-    # US Stocks - Tech
+    # US Stocks - Tech (verified)
     'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA',
-    # US Stocks - Finance
-    'JPM', 'V', 'MA', 'BAC',
-    # US Stocks - Other
+    # US Stocks - Finance (verified)
+    'JPM', 'V', 'MA',
+    # US Stocks - Other (verified)
     'JNJ', 'WMT', 'PG', 'HD', 'DIS', 'NFLX', 'PYPL',
-    # ETFs
+    # ETFs (verified)
     'SPY', 'QQQ', 'IWM', 'DIA', 'VTI', 'VOO', 'EEM',
-    # Commodities ETFs
+    # Commodity ETFs (verified - easier than futures)
     'GLD', 'SLV', 'USO',
-    # Commodities Futures (Yahoo uses =F suffix)
-    'GC=F', 'SI=F', 'CL=F', 'NG=F', 'HG=F',
 ]
 
 # Timeframes to calculate

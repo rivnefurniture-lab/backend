@@ -33,15 +33,16 @@ backtest_stocks.DATA_DIR = '/opt/algotcha/data/stocks'
 
 # Stock symbols list for detection
 STOCK_SYMBOLS = {
-    # US Stocks
-    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'BRK.B',
-    'JPM', 'V', 'JNJ', 'WMT', 'PG', 'MA', 'HD', 'DIS', 'NFLX', 'PYPL', 'BAC',
-    # ETFs
-    'SPY', 'QQQ', 'IWM', 'DIA', 'VTI', 'VOO', 'EEM', 'GLD', 'SLV', 'USO',
-    # Index Futures
-    'ES', 'NQ', 'YM', 'RTY',
-    # Commodities
-    'GC', 'SI', 'CL', 'NG', 'HG', 'GC=F', 'SI=F', 'CL=F', 'NG=F', 'HG=F',
+    # US Stocks - Tech (verified Yahoo Finance data)
+    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA',
+    # US Stocks - Finance (verified)
+    'JPM', 'V', 'MA',
+    # US Stocks - Other (verified)
+    'JNJ', 'WMT', 'PG', 'HD', 'DIS', 'NFLX', 'PYPL',
+    # ETFs (verified)
+    'SPY', 'QQQ', 'IWM', 'DIA', 'VTI', 'VOO', 'EEM',
+    # Commodity ETFs (verified)
+    'GLD', 'SLV', 'USO',
 }
 
 def log(msg):
@@ -217,11 +218,71 @@ def process_backtest(queue_item, conn):
     
     # Parse payload first to estimate duration
     payload = json.loads(payload_json)
+    
+    # ========== VALIDATION ==========
+    validation_errors = []
+    
+    # 1. Check pairs
+    pairs = payload.get('pairs', [])
+    if not pairs or len(pairs) == 0:
+        validation_errors.append("No assets selected for backtesting")
+    
+    # 2. Check entry conditions
+    entry_conditions = payload.get('entry_conditions', [])
+    bullish_entry = payload.get('bullish_entry_conditions', [])
+    bearish_entry = payload.get('bearish_entry_conditions', [])
+    has_entry = len(entry_conditions) > 0 or len(bullish_entry) > 0 or len(bearish_entry) > 0
+    
+    if not has_entry:
+        validation_errors.append("No entry conditions defined - backtest cannot open any trades")
+    
+    # 3. Check date range
+    start_date_str = payload.get('start_date', '')
+    end_date_str = payload.get('end_date', '')
+    
+    if not start_date_str or not end_date_str:
+        validation_errors.append("Start date and end date are required")
+    else:
+        try:
+            from datetime import datetime
+            start_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
+            end_dt = datetime.strptime(end_date_str, '%Y-%m-%d')
+            
+            if start_dt >= end_dt:
+                validation_errors.append("Start date must be before end date")
+            
+            # Check data availability
+            is_stocks = any(p in STOCK_SYMBOLS or '/' not in p for p in pairs)
+            min_date = datetime(2022, 1, 1) if is_stocks else datetime(2020, 1, 1)
+            
+            if start_dt < min_date:
+                validation_errors.append(f"Data only available from {min_date.strftime('%Y-%m-%d')}. Please select a later start date.")
+                
+        except ValueError as e:
+            validation_errors.append(f"Invalid date format: {e}")
+    
+    # 4. Check initial balance
+    initial_balance = payload.get('initial_balance', 0)
+    if initial_balance < 100:
+        validation_errors.append("Initial balance must be at least $100")
+    
+    # If validation errors, fail immediately
+    cursor = conn.cursor()
+    if validation_errors:
+        error_msg = "; ".join(validation_errors)
+        log(f"❌ Validation failed: {error_msg}")
+        cursor.execute("""
+            UPDATE "BacktestQueue" 
+            SET status = 'failed', "errorMessage" = %s, "completedAt" = NOW()
+            WHERE id = %s
+        """, (error_msg, queue_id))
+        conn.commit()
+        return
+    
     estimated_duration = estimate_backtest_duration(payload)
     log(f"📊 Estimated duration: {estimated_duration}s")
     
     # Update status to processing
-    cursor = conn.cursor()
     cursor.execute("""
         UPDATE "BacktestQueue" 
         SET status = 'processing', "startedAt" = NOW(), progress = 0
