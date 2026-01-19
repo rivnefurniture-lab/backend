@@ -19,6 +19,7 @@ BACKTEST_TIMEOUT = 2 * 60 * 60
 # Add script directory to path for imports
 sys.path.insert(0, '/opt/algotcha/scripts')
 import backtest2
+import backtest_stocks
 
 # Configuration
 DATABASE_URL = os.getenv('DATABASE_URL', '')
@@ -26,8 +27,22 @@ TELEGRAM_TOKEN = '8573074509:AAHDMYFF0WM6zSGkkhKHVNLTypxbw'
 GMAIL_USER = 'o.kytsuk@gmail.com'
 GMAIL_PASSWORD = 'hvxe tvqo zuhf rdqo'
 
-# Set the data directory for backtest2
+# Set the data directory for backtest modules
 backtest2.DATA_DIR = '/opt/algotcha/data/historical'
+backtest_stocks.DATA_DIR = '/opt/algotcha/data/stocks'
+
+# Stock symbols list for detection
+STOCK_SYMBOLS = {
+    # US Stocks
+    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'BRK.B',
+    'JPM', 'V', 'JNJ', 'WMT', 'PG', 'MA', 'HD', 'DIS', 'NFLX', 'PYPL', 'BAC',
+    # ETFs
+    'SPY', 'QQQ', 'IWM', 'DIA', 'VTI', 'VOO', 'EEM', 'GLD', 'SLV', 'USO',
+    # Index Futures
+    'ES', 'NQ', 'YM', 'RTY',
+    # Commodities
+    'GC', 'SI', 'CL', 'NG', 'HG', 'GC=F', 'SI=F', 'CL=F', 'NG=F', 'HG=F',
+}
 
 def log(msg):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -245,9 +260,20 @@ def process_backtest(queue_item, conn):
         progress_thread = threading.Thread(target=update_progress, daemon=True)
         progress_thread.start()
         
+        # Detect if this is a stocks/commodities backtest or crypto
+        pairs = payload.get('pairs', [])
+        is_stocks_mode = any(p in STOCK_SYMBOLS or not '/' in p for p in pairs)
+        
+        if is_stocks_mode:
+            log(f"📈 Detected STOCKS mode for pairs: {pairs}")
+            backtest_module = backtest_stocks
+        else:
+            log(f"₿ Detected CRYPTO mode for pairs: {pairs}")
+            backtest_module = backtest2
+        
         # Use ThreadPoolExecutor with timeout
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(backtest2.run_backtest, payload)
+            future = executor.submit(backtest_module.run_backtest, payload)
             try:
                 result = future.result(timeout=BACKTEST_TIMEOUT)
             except FuturesTimeoutError:

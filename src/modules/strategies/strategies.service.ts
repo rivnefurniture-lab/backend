@@ -218,6 +218,7 @@ export class StrategiesService {
         config: configStr,
         orderSize: data.orderSize || 100,
         isActive: false,
+        isPublic: false, // User strategies are private by default
       },
     });
   }

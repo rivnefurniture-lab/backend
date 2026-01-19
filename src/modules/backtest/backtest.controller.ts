@@ -70,7 +70,7 @@ export class BacktestController {
       }
       
       return userId;
-    } catch (e) {
+    } catch {
       // Return cached value if available as fallback
       if (cached) {
         return cached.id;
@@ -94,7 +94,7 @@ export class BacktestController {
   private readonly STRATEGIES_LIST_CACHE_TTL = 60000; // 60 seconds
 
   @Get('strategies')
-  async getAllStrategies() {
+  getAllStrategies() {
     // Check cache first
     if (this.strategiesListCache && Date.now() - this.strategiesListCache.timestamp < this.STRATEGIES_LIST_CACHE_TTL) {
       return this.strategiesListCache.data;
@@ -324,94 +324,15 @@ export class BacktestController {
         totalBacktestTrades: 206, // Total from CSV (206 BUY/SELL entries)
       };
       
+      // NOTE: User strategies are private - they are only visible to the user who created them
+      // The /strategies/my endpoint returns user's own strategies
+      // This public endpoint only shows preset/mock strategies for demonstration
       let userStrategies: any[] = [];
-      try {
-        const dbStrategies = await this.prisma.strategy.findMany({
-          where: { isPublic: true },
-          orderBy: [{ lastBacktestProfit: 'desc' }, { updatedAt: 'desc' }],
-          include: { user: { select: { name: true } } },
-        });
 
-        userStrategies = dbStrategies.map((s) => ({
-          id: `db-${s.id}`,
-          name: s.name,
-          description: s.description,
-          category: s.category || 'Custom',
-          config: s.config ? JSON.parse(s.config) : {},
-          pairs: s.pairs ? JSON.parse(s.pairs) : [],
-          cagr: s.lastBacktestProfit || 0,
-          sharpe: s.lastBacktestSharpe || 0,
-          maxDD: s.lastBacktestDrawdown || 0,
-          winRate: s.lastBacktestWinRate || 0,
-          returns: {
-            daily: ((s.lastBacktestProfit || 0) / 365).toFixed(3),
-            weekly: ((s.lastBacktestProfit || 0) / 52).toFixed(2),
-            monthly: ((s.lastBacktestProfit || 0) / 12).toFixed(1),
-            yearly: s.lastBacktestProfit || 0,
-          },
-          isRealData: true,
-          isUserStrategy: true,
-          updatedAt: s.updatedAt.toISOString(),
-          createdBy: s.user?.name || 'User',
-        }));
-      } catch (dbError) {
-        console.error('Failed to load user strategies:', dbError.message);
-      }
-
-      // Fetch completed backtests from database to show alongside real strategy
+      // NOTE: User backtests are private - they are only visible to the user who created them
+      // The /backtest/results endpoint returns user's own backtest results
+      // This public endpoint only shows preset/mock strategies for demonstration
       let dbBacktests: any[] = [];
-      try {
-        const recentBacktests = await this.prisma.backtestResult.findMany({
-          where: {
-            netProfitUsd: { gt: 0 }, // Only profitable strategies
-            totalTrades: { gt: 10 }, // Minimum 10 trades
-          },
-          orderBy: { sharpeRatio: 'desc' },
-          take: 5,
-          include: { user: { select: { name: true } } },
-        });
-
-        dbBacktests = recentBacktests.map((b) => {
-          // Convert raw decimals to percentages (* 100)
-          const yearlyReturnPct = (b.yearlyReturn || 0) * 100;
-          const winRatePct = (b.winRate || 0) * 100;
-          const maxDDPct = (b.maxDrawdown || 0) * 100;
-
-          return {
-            id: `backtest-${b.id}`,
-            name: b.name,
-            description: `Backtested from ${b.startDate.toISOString().split('T')[0]} to ${b.endDate.toISOString().split('T')[0]}`,
-            category: 'User Strategy',
-            cagr: yearlyReturnPct,
-            sharpe: b.sharpeRatio || 0,
-            sortino: b.sortinoRatio || 0,
-            winRate: winRatePct,
-            maxDD: maxDDPct,
-            totalTrades: b.totalTrades || 0,
-            profitFactor: b.profitFactor || 0,
-            netProfitUsd: b.netProfitUsd || 0,
-            returns: {
-              daily: (yearlyReturnPct / 365).toFixed(3),
-              weekly: (yearlyReturnPct / 52).toFixed(2),
-              monthly: (yearlyReturnPct / 12).toFixed(1),
-              yearly: yearlyReturnPct.toFixed(1),
-            },
-            pairs: b.pairs ? JSON.parse(b.pairs as string) : [],
-            tags: b.pairs
-              ? JSON.parse(b.pairs as string).slice(0, 3)
-              : ['Crypto'],
-            updatedAt: b.createdAt,
-            history: b.chartData
-              ? JSON.parse(b.chartData as string).monthlyGrowth?.map((m: any) => ({
-                  year: m.month.split('-')[0],
-                  value: m.balance,
-                }))
-              : [],
-          };
-        });
-      } catch (e) {
-        console.log('Could not fetch database backtests');
-      }
 
       // Mock strategies - can be hidden via admin panel (stored in env)
       const mockStrategiesEnabled = process.env.SHOW_MOCK_STRATEGIES !== 'false';
