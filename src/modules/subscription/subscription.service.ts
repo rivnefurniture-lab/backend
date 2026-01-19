@@ -1,8 +1,21 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 
+// Plan limits interface
+export interface PlanLimits {
+  backtestsPerDay: number;
+  maxSavedStrategies: number;
+  historicalDataYears: number;
+  indicators: string[] | 'all';
+  priorityQueue: boolean;
+  exportReports: boolean;
+  emailNotifications: boolean;
+  apiAccess?: boolean;
+  dedicatedServer?: boolean;
+}
+
 // Plan definitions with limits
-export const PLAN_LIMITS = {
+export const PLAN_LIMITS: Record<string, PlanLimits> = {
   free: {
     backtestsPerDay: 3,
     maxSavedStrategies: 3,
@@ -40,7 +53,7 @@ export interface SubscriptionStatus {
   plan: PlanType;
   isActive: boolean;
   expiresAt: Date | null;
-  limits: typeof PLAN_LIMITS.free;
+  limits: PlanLimits;
   usage: {
     backtestsToday: number;
     savedStrategies: number;
@@ -85,7 +98,7 @@ export class SubscriptionService {
   /**
    * Get plan limits for a specific plan
    */
-  getPlanLimits(plan: PlanType) {
+  getPlanLimits(plan: PlanType): PlanLimits {
     return PLAN_LIMITS[plan] || PLAN_LIMITS.free;
   }
 
