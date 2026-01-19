@@ -104,19 +104,59 @@ export class SubscriptionService {
 
   /**
    * Count backtests run by user today
+   * Only counts "meaningful" backtests:
+   * - Completed successfully (status = 'completed')
+   * - Has valid results (not NaN, not 0 profit)
+   * - Has at least 10 trades
+   * - Has at least 10% profit (to exclude trivial/failed tests)
+   * 
+   * WHY results can be 0 or NaN:
+   * - 0 profit: No trades executed (conditions never met), or all trades broke even
+   * - NaN: Division by zero in metrics (e.g., Sharpe ratio with 0 std dev), 
+   *        missing data for the period, or calculation errors
    */
   async getBacktestsToday(userId: number): Promise<number> {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    // Count only meaningful backtests that actually ran successfully
     const count = await this.prisma.backtestQueue.count({
       where: {
         userId,
         createdAt: { gte: today },
+        status: 'completed', // Only completed backtests
+        resultId: { not: null }, // Has a result
       },
     });
 
-    return count;
+    // Additionally check the results quality
+    const results = await this.prisma.backtestResult.findMany({
+      where: {
+        userId,
+        createdAt: { gte: today },
+      },
+      select: {
+        totalTrades: true,
+        netProfit: true,
+        yearlyReturn: true,
+      },
+    });
+
+    // Count only backtests with meaningful results:
+    // - At least 10 trades
+    // - Profit is not NaN and not exactly 0
+    // - Yearly return >= 10% (0.10 as decimal)
+    const meaningfulCount = results.filter(r => 
+      r.totalTrades >= 10 && 
+      r.netProfit !== null && 
+      !isNaN(r.netProfit) && 
+      r.netProfit !== 0 &&
+      r.yearlyReturn !== null &&
+      !isNaN(r.yearlyReturn) &&
+      Math.abs(r.yearlyReturn) >= 0.10
+    ).length;
+
+    return meaningfulCount;
   }
 
   /**
@@ -276,6 +316,227 @@ export class SubscriptionService {
     });
 
     return result.count;
+  }
+
+  // ==================== ADMIN FUNCTIONS ====================
+
+  /**
+   * [ADMIN] Get all users with their subscription info
+   */
+  async getAllUsersSubscriptions(): Promise<any[]> {
+    const users = await this.prisma.user.findMany({
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        subscriptionPlan: true,
+        subscriptionStatus: true,
+        subscriptionExpires: true,
+        createdAt: true,
+        _count: {
+          select: {
+            strategies: true,
+            backtestResults: true,
+            backtestQueue: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return users.map(u => ({
+      id: u.id,
+      email: u.email,
+      name: u.name,
+      plan: u.subscriptionPlan || 'free',
+      status: u.subscriptionStatus || 'none',
+      expiresAt: u.subscriptionExpires,
+      createdAt: u.createdAt,
+      isActive: u.subscriptionStatus === 'active' && 
+        (!u.subscriptionExpires || new Date(u.subscriptionExpires) > new Date()),
+      daysRemaining: u.subscriptionExpires 
+        ? Math.max(0, Math.ceil((new Date(u.subscriptionExpires).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+        : null,
+      stats: {
+        strategies: u._count.strategies,
+        backtests: u._count.backtestResults,
+        queueItems: u._count.backtestQueue,
+      },
+    }));
+  }
+
+  /**
+   * [ADMIN] Grant subscription access to a user
+   */
+  async grantAccess(
+    userId: number,
+    plan: PlanType,
+    days: number,
+    grantedBy: string,
+  ): Promise<{ success: boolean; message: string; expiresAt: Date }> {
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + days);
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        subscriptionPlan: plan,
+        subscriptionStatus: 'active',
+        subscriptionExpires: expiresAt,
+      },
+    });
+
+    // Log the grant action (you could create an audit log table for this)
+    console.log(`[ADMIN] ${grantedBy} granted ${plan} access to user ${userId} for ${days} days (expires: ${expiresAt.toISOString()})`);
+
+    return {
+      success: true,
+      message: `Granted ${plan} access for ${days} days`,
+      expiresAt,
+    };
+  }
+
+  /**
+   * [ADMIN] Revoke subscription access from a user
+   */
+  async revokeAccess(
+    userId: number,
+    revokedBy: string,
+  ): Promise<{ success: boolean; message: string }> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        subscriptionPlan: 'free',
+        subscriptionStatus: 'revoked',
+        subscriptionExpires: null,
+      },
+    });
+
+    console.log(`[ADMIN] ${revokedBy} revoked subscription from user ${userId}`);
+
+    return {
+      success: true,
+      message: 'Subscription access revoked',
+    };
+  }
+
+  /**
+   * [ADMIN] Get user's subscription details by email
+   */
+  async getUserByEmail(email: string): Promise<any> {
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        subscriptionPlan: true,
+        subscriptionStatus: true,
+        subscriptionExpires: true,
+        createdAt: true,
+        _count: {
+          select: {
+            strategies: true,
+            backtestResults: true,
+            backtestQueue: true,
+          },
+        },
+      },
+    });
+
+    if (!user) return null;
+
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      plan: user.subscriptionPlan || 'free',
+      status: user.subscriptionStatus || 'none',
+      expiresAt: user.subscriptionExpires,
+      createdAt: user.createdAt,
+      isActive: user.subscriptionStatus === 'active' && 
+        (!user.subscriptionExpires || new Date(user.subscriptionExpires) > new Date()),
+      stats: {
+        strategies: user._count.strategies,
+        backtests: user._count.backtestResults,
+        queueItems: user._count.backtestQueue,
+      },
+    };
+  }
+
+  /**
+   * [ADMIN] Get backtest quality stats (for understanding NaN/0 results)
+   */
+  async getBacktestQualityStats(): Promise<any> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const allBacktests = await this.prisma.backtestResult.findMany({
+      select: {
+        id: true,
+        name: true,
+        totalTrades: true,
+        netProfit: true,
+        yearlyReturn: true,
+        createdAt: true,
+        user: { select: { email: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+
+    const stats = {
+      total: allBacktests.length,
+      withZeroProfit: 0,
+      withNaNProfit: 0,
+      withLessThan10Trades: 0,
+      withLessThan10PercentReturn: 0,
+      meaningful: 0,
+      recentBacktests: [] as any[],
+    };
+
+    for (const bt of allBacktests) {
+      const isNaN = bt.netProfit === null || Number.isNaN(bt.netProfit);
+      const isZero = bt.netProfit === 0;
+      const fewTrades = (bt.totalTrades || 0) < 10;
+      const lowReturn = bt.yearlyReturn !== null && Math.abs(bt.yearlyReturn) < 0.10;
+
+      if (isNaN) stats.withNaNProfit++;
+      if (isZero) stats.withZeroProfit++;
+      if (fewTrades) stats.withLessThan10Trades++;
+      if (lowReturn) stats.withLessThan10PercentReturn++;
+      
+      if (!isNaN && !isZero && !fewTrades && !lowReturn) {
+        stats.meaningful++;
+      }
+
+      stats.recentBacktests.push({
+        id: bt.id,
+        name: bt.name,
+        email: bt.user?.email,
+        trades: bt.totalTrades,
+        profit: bt.netProfit,
+        yearlyReturn: bt.yearlyReturn ? (bt.yearlyReturn * 100).toFixed(2) + '%' : 'N/A',
+        createdAt: bt.createdAt,
+        isMeaningful: !isNaN && !isZero && !fewTrades && !lowReturn,
+        issues: [
+          isNaN && 'NaN profit',
+          isZero && 'Zero profit',
+          fewTrades && '<10 trades',
+          lowReturn && '<10% return',
+        ].filter(Boolean),
+      });
+    }
+
+    return {
+      ...stats,
+      explanation: {
+        zeroProfit: 'No trades were executed (entry conditions never met) or all trades broke even.',
+        nanProfit: 'Calculation error - usually division by zero in metrics (e.g., Sharpe ratio with 0 standard deviation), missing price data for the selected period, or incomplete backtest.',
+        fewTrades: 'Strategy is too conservative or period too short - not enough data to be statistically meaningful.',
+        lowReturn: 'Strategy performance is negligible - likely random noise rather than actual edge.',
+      },
+    };
   }
 }
 

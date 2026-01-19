@@ -5,11 +5,16 @@ import {
   Body,
   UseGuards,
   Req,
+  Query,
+  Param,
 } from '@nestjs/common';
 import { Request } from 'express';
 import { SubscriptionService, PlanType } from './subscription.service';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 import { PrismaService } from '../../prisma/prisma.service';
+
+// Admin emails that can manage subscriptions
+const ADMIN_EMAILS = ['liudvichuk@gmail.com'];
 
 interface JwtUser {
   sub: string;
@@ -212,6 +217,136 @@ export class SubscriptionController {
     const userId = await this.getUserId(req);
     await this.subscriptionService.cancelSubscription(userId);
     return { success: true, message: 'Subscription cancelled. Access continues until expiration.' };
+  }
+
+  // ==================== ADMIN ENDPOINTS ====================
+
+  /**
+   * Check if user is admin
+   */
+  private isAdmin(req: AuthenticatedRequest): boolean {
+    const email = this.getEmail(req);
+    return ADMIN_EMAILS.includes(email);
+  }
+
+  /**
+   * [ADMIN] Get all users with subscriptions
+   */
+  @UseGuards(JwtAuthGuard)
+  @Get('admin/users')
+  async getAllUsers(@Req() req: AuthenticatedRequest) {
+    if (!this.isAdmin(req)) {
+      return { error: 'Unauthorized - Admin access required' };
+    }
+    return this.subscriptionService.getAllUsersSubscriptions();
+  }
+
+  /**
+   * [ADMIN] Search user by email
+   */
+  @UseGuards(JwtAuthGuard)
+  @Get('admin/user')
+  async getUserByEmail(
+    @Req() req: AuthenticatedRequest,
+    @Query('email') email: string,
+  ) {
+    if (!this.isAdmin(req)) {
+      return { error: 'Unauthorized - Admin access required' };
+    }
+    if (!email) {
+      return { error: 'Email parameter required' };
+    }
+    const user = await this.subscriptionService.getUserByEmail(email);
+    if (!user) {
+      return { error: 'User not found' };
+    }
+    return user;
+  }
+
+  /**
+   * [ADMIN] Grant subscription access
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('admin/grant')
+  async grantAccess(
+    @Req() req: AuthenticatedRequest,
+    @Body() body: { userId?: number; email?: string; plan: PlanType; days: number },
+  ) {
+    if (!this.isAdmin(req)) {
+      return { error: 'Unauthorized - Admin access required' };
+    }
+
+    let targetUserId = body.userId;
+
+    // If email provided instead of userId, look up the user
+    if (!targetUserId && body.email) {
+      const user = await this.prisma.user.findUnique({
+        where: { email: body.email },
+        select: { id: true },
+      });
+      if (!user) {
+        return { error: `User with email ${body.email} not found` };
+      }
+      targetUserId = user.id;
+    }
+
+    if (!targetUserId) {
+      return { error: 'Either userId or email is required' };
+    }
+
+    const adminEmail = this.getEmail(req);
+    return this.subscriptionService.grantAccess(
+      targetUserId,
+      body.plan || 'pro',
+      body.days || 7,
+      adminEmail,
+    );
+  }
+
+  /**
+   * [ADMIN] Revoke subscription access
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('admin/revoke')
+  async revokeAccess(
+    @Req() req: AuthenticatedRequest,
+    @Body() body: { userId?: number; email?: string },
+  ) {
+    if (!this.isAdmin(req)) {
+      return { error: 'Unauthorized - Admin access required' };
+    }
+
+    let targetUserId = body.userId;
+
+    if (!targetUserId && body.email) {
+      const user = await this.prisma.user.findUnique({
+        where: { email: body.email },
+        select: { id: true },
+      });
+      if (!user) {
+        return { error: `User with email ${body.email} not found` };
+      }
+      targetUserId = user.id;
+    }
+
+    if (!targetUserId) {
+      return { error: 'Either userId or email is required' };
+    }
+
+    const adminEmail = this.getEmail(req);
+    return this.subscriptionService.revokeAccess(targetUserId, adminEmail);
+  }
+
+  /**
+   * [ADMIN] Get backtest quality stats (explains NaN/0 results)
+   */
+  @UseGuards(JwtAuthGuard)
+  @Get('admin/backtest-quality')
+  async getBacktestQuality(@Req() req: AuthenticatedRequest) {
+    if (!this.isAdmin(req)) {
+      return { error: 'Unauthorized - Admin access required' };
+    }
+    return this.subscriptionService.getBacktestQualityStats();
   }
 }
 
