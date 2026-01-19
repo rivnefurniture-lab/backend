@@ -945,6 +945,22 @@ print(json.dumps(result))
       orderBy: { createdAt: 'desc' },
       take: 50,
     });
+    
+    // Get duration info from BacktestQueue if available
+    const resultIds = results.map(r => r.id);
+    const queueItems = await this.prisma.backtestQueue.findMany({
+      where: { resultId: { in: resultIds } },
+      select: { resultId: true, startedAt: true, completedAt: true },
+    });
+    
+    const durationMap = new Map<number, number>();
+    for (const q of queueItems) {
+      if (q.resultId && q.startedAt && q.completedAt) {
+        const durationMs = new Date(q.completedAt).getTime() - new Date(q.startedAt).getTime();
+        durationMap.set(q.resultId, Math.round(durationMs / 1000)); // Duration in seconds
+      }
+    }
+    
     return results.map((r) => ({
       id: r.id,
       strategy_name: r.name,
@@ -955,6 +971,7 @@ print(json.dumps(result))
       total_trades: r.totalTrades,
       win_rate: r.winRate,
       yearly_return: r.yearlyReturn,
+      duration_seconds: durationMap.get(r.id) || null, // Duration in seconds
     }));
   }
 
