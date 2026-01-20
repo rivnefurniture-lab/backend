@@ -96,7 +96,7 @@ export class PaymentsService {
       product_name: productName || serviceNames[planId].uk,
       product_category: 'software',
       product_description: productDescription || serviceDescriptions[planId].uk,
-      expired_date: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours expiry
+      expired_date: this.formatLiqPayDate(new Date(Date.now() + 24 * 60 * 60 * 1000)), // 24 hours expiry in LiqPay format
     };
 
     // Generate signature
@@ -118,6 +118,19 @@ export class PaymentsService {
       // Alternative: return HTML form for embedded checkout
       formHtml: this.generateLiqPayForm(data, signature),
     };
+  }
+
+  /**
+   * Format date for LiqPay (YYYY-MM-DD HH:MM:SS)
+   */
+  private formatLiqPayDate(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
   }
 
   /**
