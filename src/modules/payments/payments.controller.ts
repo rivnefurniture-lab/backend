@@ -13,6 +13,9 @@ interface LiqPayCreateBody {
   billing?: Billing;
   email?: string;
   amount?: number;
+  currency?: 'USD' | 'UAH';
+  productName?: string;
+  productDescription?: string;
 }
 
 interface LiqPayCallbackBody {
@@ -39,12 +42,15 @@ export class PaymentsController {
   @Post('liqpay/create')
   async createLiqPay(@Body() body: LiqPayCreateBody) {
     try {
-      this.logger.log(`Creating LiqPay payment for plan: ${body.planId}, billing: ${body.billing}`);
+      this.logger.log(`Creating LiqPay payment for plan: ${body.planId}, billing: ${body.billing}, currency: ${body.currency || 'USD'}`);
       
       return await this.payments.createLiqPayPayment(
         body.planId || 'pro',
         body.billing || 'monthly',
         body.email,
+        body.currency || 'USD',
+        body.productName,
+        body.productDescription,
       );
     } catch (error) {
       this.logger.error(`Failed to create LiqPay payment: ${error.message}`);

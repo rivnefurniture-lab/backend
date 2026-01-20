@@ -19,6 +19,9 @@ export class PaymentsService {
     enterprise: { monthly: 99, yearly: 79 },
   };
 
+  // Exchange rate for UAH
+  private readonly USD_TO_UAH = 41;
+
   // ==================== LIQPAY ====================
   /**
    * Create LiqPay payment
@@ -28,16 +31,53 @@ export class PaymentsService {
     planId: PlanId = 'pro',
     billing: Billing = 'monthly',
     userEmail?: string,
+    currency: 'USD' | 'UAH' = 'USD',
+    productName?: string,
+    productDescription?: string,
   ) {
     const priceConfig = this.PRICE_MAP[planId];
-    const amount = billing === 'yearly' ? priceConfig.yearly : priceConfig.monthly;
+    const amountUSD = billing === 'yearly' ? priceConfig.yearly : priceConfig.monthly;
 
-    if (amount === 0) {
+    if (amountUSD === 0) {
       throw new Error('Cannot create payment for free plan');
     }
 
+    // Calculate amount in selected currency
+    const amount = currency === 'UAH' ? Math.round(amountUSD * this.USD_TO_UAH) : amountUSD;
+
     // Generate unique order_id
     const orderId = `algotcha_${planId}_${billing}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    // Service names for compliance
+    const serviceNames: Record<PlanId, { uk: string; en: string }> = {
+      free: { 
+        uk: 'Algotcha Free - Базовий доступ до SaaS платформи', 
+        en: 'Algotcha Free - Basic SaaS Platform Access' 
+      },
+      pro: { 
+        uk: 'Algotcha Pro - Професійна підписка на SaaS платформу бектестування', 
+        en: 'Algotcha Pro - Professional Backtesting SaaS Platform Subscription' 
+      },
+      enterprise: { 
+        uk: 'Algotcha Enterprise - Корпоративна підписка на SaaS платформу', 
+        en: 'Algotcha Enterprise - Corporate SaaS Platform Subscription' 
+      },
+    };
+
+    const serviceDescriptions: Record<PlanId, { uk: string; en: string }> = {
+      free: {
+        uk: 'Безкоштовний план для ознайомлення з платформою бектестування',
+        en: 'Free plan to explore the backtesting platform',
+      },
+      pro: {
+        uk: 'Професійний план з необмеженим доступом до бектестування, всіх технічних індикаторів та 5 років історичних даних',
+        en: 'Professional plan with unlimited backtesting, all technical indicators, and 5 years of historical data',
+      },
+      enterprise: {
+        uk: 'Корпоративний план з виділеним сервером, API доступом та персональним менеджером',
+        en: 'Corporate plan with dedicated server, API access, and personal account manager',
+      },
+    };
 
     // LiqPay payment parameters
     const params = {
@@ -45,17 +85,17 @@ export class PaymentsService {
       version: '3',
       action: 'pay',
       amount: amount,
-      currency: 'USD',
-      description: `Algotcha ${planId.toUpperCase()} - ${billing === 'yearly' ? 'Annual' : 'Monthly'} Subscription`,
+      currency: currency,
+      description: productName || serviceNames[planId].uk, // Use Ukrainian for LiqPay
       order_id: orderId,
       result_url: `${this.FRONTEND_URL}/pay-success?plan=${planId}&billing=${billing}`,
       server_url: `${process.env.BACKEND_URL || 'https://algotcha-api-prod.up.railway.app'}/pay/liqpay/callback`,
       language: 'uk', // Default to Ukrainian per LiqPay requirements
       ...(userEmail && { customer_email: userEmail }),
-      // Additional parameters
-      product_name: `Algotcha ${planId.toUpperCase()}`,
+      // Additional parameters for compliance
+      product_name: productName || serviceNames[planId].uk,
       product_category: 'software',
-      product_description: `Trading strategy backtest platform subscription`,
+      product_description: productDescription || serviceDescriptions[planId].uk,
       expired_date: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours expiry
     };
 
@@ -71,7 +111,8 @@ export class PaymentsService {
       checkoutUrl,
       orderId,
       amount,
-      currency: 'USD',
+      currency,
+      amountUSD, // Original USD amount for reference
       data,
       signature,
       // Alternative: return HTML form for embedded checkout
