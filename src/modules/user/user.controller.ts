@@ -2,6 +2,10 @@ import { Controller, Get, Post, Body, UseGuards, Req } from '@nestjs/common';
 import { Request } from 'express';
 import { PrismaService } from '../../prisma/prisma.service';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
+import {
+  SubscriptionService,
+  PLAN_LIMITS,
+} from '../subscription/subscription.service';
 
 interface JwtUser {
   sub: string; // Supabase uses UUID strings
@@ -19,7 +23,10 @@ export class UserController {
   private userCache: Map<string, { user: any; timestamp: number }> = new Map();
   private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly subscriptionService: SubscriptionService,
+  ) {}
 
   // Get the supabase UUID from JWT
   private getSupabaseId(req: AuthenticatedRequest): string {
@@ -153,6 +160,105 @@ export class UserController {
     } catch (e) {
       console.error('Error fetching profile:', e);
       return { error: 'Failed to fetch profile', details: e.message };
+    }
+  }
+
+  /**
+   * Get user's current plan limits and usage
+   * This provides a clear overview of what features are available
+   * and how much of the quota has been used
+   */
+  @Get('limits')
+  async getLimits(@Req() req: AuthenticatedRequest) {
+    const supabaseId = this.getSupabaseId(req);
+    const email = this.getEmail(req);
+
+    try {
+      const user = await this.findOrCreateUser(supabaseId, email);
+
+      if (!user) {
+        // Return free plan limits for anonymous users
+        const freeLimits = PLAN_LIMITS.free;
+        return {
+          plan: 'free',
+          isActive: false,
+          expiresAt: null,
+          limits: {
+            backtestsPerDay: freeLimits.backtestsPerDay,
+            maxSavedStrategies: freeLimits.maxSavedStrategies,
+            historicalDataYears: freeLimits.historicalDataYears,
+            indicators: freeLimits.indicators,
+            priorityQueue: freeLimits.priorityQueue,
+            exportReports: freeLimits.exportReports,
+            emailNotifications: freeLimits.emailNotifications,
+          },
+          usage: {
+            backtestsToday: 0,
+            savedStrategies: 0,
+          },
+          remaining: {
+            backtestsToday: freeLimits.backtestsPerDay,
+            savedStrategies: freeLimits.maxSavedStrategies,
+          },
+          canRunBacktest: true,
+          canSaveStrategy: true,
+        };
+      }
+
+      // Get full subscription status from service
+      const status =
+        await this.subscriptionService.getSubscriptionStatus(user.id);
+
+      // Calculate remaining quotas
+      const remaining = {
+        backtestsToday:
+          status.limits.backtestsPerDay === -1
+            ? 'unlimited'
+            : Math.max(
+                0,
+                status.limits.backtestsPerDay - status.usage.backtestsToday,
+              ),
+        savedStrategies:
+          status.limits.maxSavedStrategies === -1
+            ? 'unlimited'
+            : Math.max(
+                0,
+                status.limits.maxSavedStrategies - status.usage.savedStrategies,
+              ),
+      };
+
+      return {
+        plan: status.plan,
+        isActive: status.isActive,
+        expiresAt: status.expiresAt,
+        limits: {
+          backtestsPerDay:
+            status.limits.backtestsPerDay === -1
+              ? 'unlimited'
+              : status.limits.backtestsPerDay,
+          maxSavedStrategies:
+            status.limits.maxSavedStrategies === -1
+              ? 'unlimited'
+              : status.limits.maxSavedStrategies,
+          historicalDataYears: status.limits.historicalDataYears,
+          indicators: status.limits.indicators,
+          priorityQueue: status.limits.priorityQueue,
+          exportReports: status.limits.exportReports,
+          emailNotifications: status.limits.emailNotifications,
+          apiAccess: status.limits.apiAccess || false,
+          dedicatedServer: status.limits.dedicatedServer || false,
+        },
+        usage: {
+          backtestsToday: status.usage.backtestsToday,
+          savedStrategies: status.usage.savedStrategies,
+        },
+        remaining,
+        canRunBacktest: status.canRunBacktest,
+        canSaveStrategy: status.canSaveStrategy,
+      };
+    } catch (e) {
+      console.error('Error fetching limits:', e);
+      return { error: 'Failed to fetch limits', details: e.message };
     }
   }
 
