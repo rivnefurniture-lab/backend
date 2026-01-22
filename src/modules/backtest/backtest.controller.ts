@@ -38,39 +38,39 @@ export class BacktestController {
     private readonly prisma: PrismaService,
     private readonly queueService: QueueService,
     private readonly subscriptionService: SubscriptionService,
-  ) {}
+  ) { }
 
   // Resolve Supabase UUID to database user ID (with caching)
   private async getUserId(req: AuthenticatedRequest): Promise<number> {
     const supabaseId = req.user?.sub || '';
     const email = req.user?.email || '';
-    
+
     // Check cache first
     const cached = this.userIdCache.get(supabaseId);
     if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
       return cached.id;
     }
-    
+
     try {
       let user = await this.prisma.user.findFirst({
         where: { supabaseId },
         select: { id: true },
       });
-      
+
       if (!user && email) {
         user = await this.prisma.user.findUnique({
           where: { email },
           select: { id: true },
         });
       }
-      
+
       const userId = user?.id || 1;
-      
+
       // Cache the result
       if (supabaseId && userId !== 1) {
         this.userIdCache.set(supabaseId, { id: userId, timestamp: Date.now() });
       }
-      
+
       return userId;
     } catch {
       // Return cached value if available as fallback
@@ -325,7 +325,7 @@ export class BacktestController {
         ],
         totalBacktestTrades: 206, // Total from CSV (206 BUY/SELL entries)
       };
-      
+
       // NOTE: User strategies are private - they are only visible to the user who created them
       // The /strategies/my endpoint returns user's own strategies
       // This public endpoint only shows preset/mock strategies for demonstration
@@ -337,8 +337,8 @@ export class BacktestController {
       let dbBacktests: any[] = [];
 
       // Mock strategies - can be hidden via admin panel (stored in env)
-      const mockStrategiesEnabled = process.env.SHOW_MOCK_STRATEGIES !== 'false';
-      
+      const mockStrategiesEnabled = process.env.SHOW_MOCK_STRATEGIES === 'true';
+
       const mockStrategies = mockStrategiesEnabled ? [
         {
           id: 'mock-macd-momentum',
@@ -362,7 +362,7 @@ export class BacktestController {
           },
           pairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'AVAX/USDT', 'LINK/USDT'],
           tags: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
-          updatedAt: new Date('2025-12-15'),
+          updatedAt: new Date(),
           isPreset: true,
           isMock: true,
           history: [
@@ -396,7 +396,7 @@ export class BacktestController {
           },
           pairs: ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'XRP/USDT', 'DOGE/USDT', 'SHIB/USDT'],
           tags: ['BTC/USDT', 'ETH/USDT', 'BNB/USDT'],
-          updatedAt: new Date('2025-12-14'),
+          updatedAt: new Date(),
           isPreset: true,
           isMock: true,
           history: [
@@ -430,7 +430,7 @@ export class BacktestController {
           },
           pairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ADA/USDT'],
           tags: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
-          updatedAt: new Date('2025-12-13'),
+          updatedAt: new Date(),
           isPreset: true,
           isMock: true,
           history: [
@@ -464,7 +464,7 @@ export class BacktestController {
           },
           pairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'AVAX/USDT', 'DOT/USDT', 'ATOM/USDT', 'NEAR/USDT'],
           tags: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
-          updatedAt: new Date('2025-12-12'),
+          updatedAt: new Date(),
           isPreset: true,
           isMock: true,
           history: [
@@ -498,7 +498,7 @@ export class BacktestController {
           },
           pairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'AVAX/USDT', 'LINK/USDT', 'DOT/USDT'],
           tags: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
-          updatedAt: new Date('2025-12-11'),
+          updatedAt: new Date(),
           isPreset: true,
           isMock: true,
           history: [
@@ -514,10 +514,10 @@ export class BacktestController {
 
       // Return real backtest first, then mock strategies, then database backtests, then user strategies
       const result = [realBacktest, ...mockStrategies, ...dbBacktests, ...userStrategies];
-      
+
       // Cache the result
       this.strategiesListCache = { data: result, timestamp: Date.now() };
-      
+
       return result;
     } catch (error) {
       console.error('Failed to load strategies:', error.message);
@@ -541,8 +541,8 @@ export class BacktestController {
   getMockStrategiesStatus() {
     return {
       enabled: process.env.SHOW_MOCK_STRATEGIES !== 'false',
-      message: process.env.SHOW_MOCK_STRATEGIES !== 'false' 
-        ? 'Mock strategies are currently visible' 
+      message: process.env.SHOW_MOCK_STRATEGIES !== 'false'
+        ? 'Mock strategies are currently visible'
         : 'Mock strategies are currently hidden'
     };
   }
@@ -553,15 +553,15 @@ export class BacktestController {
   toggleMockStrategies(@Body() body: { enabled: boolean }) {
     // Store in environment variable (note: this is runtime only, not persistent across restarts)
     process.env.SHOW_MOCK_STRATEGIES = body.enabled ? 'true' : 'false';
-    
+
     // Clear the strategies cache to reflect the change immediately
     this.strategiesListCache = null;
-    
+
     return {
       success: true,
       enabled: body.enabled,
-      message: body.enabled 
-        ? 'Mock strategies are now visible' 
+      message: body.enabled
+        ? 'Mock strategies are now visible'
         : 'Mock strategies are now hidden'
     };
   }
@@ -573,7 +573,7 @@ export class BacktestController {
     @Body() dto: RunBacktestDto,
   ) {
     const result = await this.backtestService.runBacktest(dto);
-    
+
     if (result.status === 'success') {
       const userId = await this.getUserId(req);
       const saved = await this.backtestService.saveBacktestResult(
@@ -583,7 +583,7 @@ export class BacktestController {
       );
       return { ...result, savedId: saved.id };
     }
-    
+
     return result;
   }
 
@@ -601,21 +601,21 @@ export class BacktestController {
   async getResults(@Req() req: AuthenticatedRequest) {
     try {
       const userId = await this.getUserId(req);
-      
+
       // Check cache first
       const cached = this.resultsCache.get(userId);
       if (cached && Date.now() - cached.timestamp < this.RESULTS_CACHE_TTL_MS) {
         console.log(`[getResults] Cache hit for userId: ${userId}`);
         return cached.data;
       }
-      
+
       console.log(`[getResults] Fetching results for userId: ${userId}`);
       const results = await this.backtestService.getBacktestResults(userId);
       console.log(`[getResults] Found ${results.length} results`);
-      
+
       // Cache the result
       this.resultsCache.set(userId, { data: results, timestamp: Date.now() });
-      
+
       return results;
     } catch (error) {
       console.error('[getResults] Error:', error);
@@ -632,11 +632,11 @@ export class BacktestController {
   @Get('results/:id/export/csv')
   async exportCSV(@Param('id') id: string, @Res() res: Response) {
     const result = await this.backtestService.getBacktestResult(parseInt(id));
-    
+
     if (!result || !result.trades) {
       return res.status(404).json({ error: 'Backtest result not found' });
     }
-    
+
     const headers = [
       'Date',
       'Time',
@@ -659,11 +659,11 @@ export class BacktestController {
         t.profit_percent || '0',
         t.profit_usd || '0',
         t.equity,
-      `"${t.reason || ''}"`,
+        `"${t.reason || ''}"`,
         `"${(t.indicatorProof || []).map((p: any) => `${p.indicator}: ${p.value}`).join('; ')}"`,
       ].join(','),
     );
-    
+
     const csv = [headers.join(','), ...rows].join('\n');
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader(
@@ -754,11 +754,11 @@ export class BacktestController {
     body: { payload: RunBacktestDto; notifyVia: 'telegram' | 'email' | 'both' },
   ) {
     const userId = await this.getUserId(req);
-    
+
     // Check subscription limits
     const canBacktest = await this.subscriptionService.canRunBacktest(userId);
     if (!canBacktest.allowed) {
-      return { 
+      return {
         error: canBacktest.reason,
         limitReached: true,
         upgrade: '/pricing',
@@ -844,8 +844,8 @@ export class BacktestController {
     }
 
     // Allow deletion of own items OR if status is failed/cancelled/completed
-    const canDelete = queueItem.userId === userId || 
-                      ['failed', 'cancelled', 'completed'].includes(queueItem.status);
+    const canDelete = queueItem.userId === userId ||
+      ['failed', 'cancelled', 'completed'].includes(queueItem.status);
 
     if (!canDelete) {
       return { error: 'Cannot delete this queue item - must be completed, failed, or cancelled' };
@@ -876,8 +876,8 @@ export class BacktestController {
 
     await this.prisma.backtestQueue.update({
       where: { id: parseInt(id) },
-      data: { 
-        status: 'failed', 
+      data: {
+        status: 'failed',
         completedAt: new Date(),
         errorMessage: 'Manually terminated by admin (stuck backtest)'
       },
@@ -891,7 +891,7 @@ export class BacktestController {
   @Post('queue/reset-stuck')
   async resetStuckBacktests() {
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
-    
+
     const stuck = await this.prisma.backtestQueue.updateMany({
       where: {
         status: 'processing',
@@ -904,10 +904,10 @@ export class BacktestController {
       },
     });
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       message: `Reset ${stuck.count} stuck backtests`,
-      count: stuck.count 
+      count: stuck.count
     };
   }
 
@@ -921,7 +921,7 @@ export class BacktestController {
     });
 
     const plan = user?.subscriptionPlan || 'free';
-    
+
     // Define limits per plan
     const limits = {
       free: { monthly: 5, concurrent: 1 },
@@ -963,8 +963,8 @@ export class BacktestController {
         monthly: planLimits.monthly === -1 ? -1 : planLimits.monthly - usedThisMonth,
         concurrent: planLimits.concurrent - currentlyRunning,
       },
-      canRunBacktest: (planLimits.monthly === -1 || usedThisMonth < planLimits.monthly) && 
-                      currentlyRunning < planLimits.concurrent,
+      canRunBacktest: (planLimits.monthly === -1 || usedThisMonth < planLimits.monthly) &&
+        currentlyRunning < planLimits.concurrent,
     };
   }
 
@@ -1080,7 +1080,7 @@ export class BacktestController {
         const progress = item.progress || 0;
         // Use estimated duration from database if available, otherwise default
         const totalEstimated = (item as any).estimatedSeconds || 120;
-        
+
         let estimatedRemaining = totalEstimated;
         if (item.status === 'processing' && progress > 0) {
           // Calculate remaining based on actual progress
@@ -1272,7 +1272,7 @@ export class BacktestController {
         };
       }
     }
-    
+
     // For other strategies, return empty for now
     return {
       strategyId: id,
