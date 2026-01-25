@@ -104,9 +104,10 @@ export class QueueService {
     userId: number,
     strategyName: string,
     payload: RunBacktestDto,
-    notifyVia: 'telegram' | 'email' | 'both',
+    notifyVia: 'telegram' | 'email' | 'both' | 'whatsapp' | 'all',
     userEmail: string,
     userTelegramId?: string,
+    userWhatsApp?: string | null,
   ) {
     // Get current queue length
     const queueLength = await this.prisma.backtestQueue.count({
@@ -143,6 +144,7 @@ export class QueueService {
         notifyVia,
         notifyEmail: userEmail,
         notifyTelegram: userTelegramId || null,
+        notifyWhatsApp: userWhatsApp || null,
         queuePosition: queueLength + 1,
         status: 'queued',
       },

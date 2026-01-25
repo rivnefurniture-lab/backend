@@ -751,7 +751,13 @@ export class BacktestController {
   async addToQueue(
     @Req() req: AuthenticatedRequest,
     @Body()
-    body: { payload: RunBacktestDto; notifyVia: 'telegram' | 'email' | 'both' },
+    body: {
+      payload: RunBacktestDto;
+      notifyVia: 'telegram' | 'email' | 'both' | 'whatsapp' | 'all';
+      notifyWhatsapp?: string;
+      notifyEmail?: string;
+      notifyTelegram?: string;
+    },
   ) {
     const userId = await this.getUserId(req);
 
@@ -767,7 +773,14 @@ export class BacktestController {
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { email: true, telegramId: true },
+      select: {
+        email: true,
+        telegramId: true,
+        whatsappNumber: true,
+        whatsappEnabled: true,
+        emailNotifications: true,
+        telegramEnabled: true,
+      },
     });
 
     if (!user) {
@@ -779,8 +792,9 @@ export class BacktestController {
       body.payload.strategy_name || 'My Strategy',
       body.payload,
       body.notifyVia,
-      user.email,
-      user.telegramId || undefined,
+      body.notifyEmail || user.email,
+      body.notifyTelegram || (user.telegramEnabled ? user.telegramId : undefined),
+      body.notifyWhatsapp || (user.whatsappEnabled ? user.whatsappNumber : null),
     );
 
     return {
@@ -1351,4 +1365,3 @@ export class BacktestController {
     }
   }
 }
-

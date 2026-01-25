@@ -26,6 +26,9 @@ DATABASE_URL = os.getenv('DATABASE_URL', '')
 TELEGRAM_TOKEN = '8573074509:AAHDMYFF0WM6zSGkkhKHVNLTypxbw'
 GMAIL_USER = 'o.kytsuk@gmail.com'
 GMAIL_PASSWORD = 'hvxe tvqo zuhf rdqo'
+TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
+TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
+TWILIO_WHATSAPP_FROM = os.getenv('TWILIO_WHATSAPP_FROM')
 
 # Set the data directory for backtest modules
 backtest2.DATA_DIR = '/opt/algotcha/data/historical'
@@ -116,8 +119,21 @@ def convert_numpy_types(obj):
     else:
         return obj
 
-def notify_user(notify_via, email, telegram_id, strategy_name, metrics, status, error=None):
+def notify_user(notify_via, email, telegram_id, notify_whatsapp, strategy_name, metrics, status, error=None):
     """Send notification to user via their preferred method"""
+    def send_whatsapp(msg: str):
+        if not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM and notify_via in ['whatsapp', 'all'] and notify_whatsapp):
+            return
+        try:
+          from twilio.rest import Client
+          client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+          client.messages.create(
+              from_=TWILIO_WHATSAPP_FROM,
+              to=notify_whatsapp if str(notify_whatsapp).startswith('whatsapp:') else f'whatsapp:{notify_whatsapp}',
+              body=msg
+          )
+        except Exception as e:
+          log(f"⚠️  Failed to send WhatsApp: {e}")
     
     if status == 'completed':
         # Handle 'Infinity' profit factor
@@ -172,11 +188,14 @@ def notify_user(notify_via, email, telegram_id, strategy_name, metrics, status, 
         email_subject = f"❌ Backtest Failed - {strategy_name}"
     
     # Send notifications
-    if notify_via in ['telegram', 'both'] and telegram_id:
+    if notify_via in ['telegram', 'both', 'all'] and telegram_id:
         send_telegram(telegram_id, telegram_msg)
     
-    if notify_via in ['email', 'both'] and email:
+    if notify_via in ['email', 'both', 'all'] and email:
         send_email(email, email_subject, email_html)
+    
+    if notify_via in ['whatsapp', 'all']:
+        send_whatsapp(telegram_msg if status == 'completed' else f"Backtest failed: {error}")
 
 def estimate_backtest_duration(payload):
     """Estimate how long a backtest will take based on parameters"""
@@ -213,6 +232,7 @@ def process_backtest(queue_item, conn):
     notify_via = queue_item[4]
     notify_email = queue_item[5]
     notify_telegram = queue_item[6]
+    notify_whatsapp = queue_item[7]
     
     log(f"🚀 Processing backtest #{queue_id}: {strategy_name}")
     
@@ -422,7 +442,7 @@ def process_backtest(queue_item, conn):
             conn.commit()
             
             # Send notification
-            notify_user(notify_via, notify_email, notify_telegram, strategy_name, metrics, 'completed')
+            notify_user(notify_via, notify_email, notify_telegram, notify_whatsapp, strategy_name, metrics, 'completed')
             
             return True
         else:
@@ -436,7 +456,7 @@ def process_backtest(queue_item, conn):
             """, (error_msg, queue_id))
             conn.commit()
             
-            notify_user(notify_via, notify_email, notify_telegram, strategy_name, {}, 'failed', error_msg)
+            notify_user(notify_via, notify_email, notify_telegram, notify_whatsapp, strategy_name, {}, 'failed', error_msg)
             
             return False
             
@@ -476,7 +496,7 @@ def main():
             # Get next queued item
             cursor.execute("""
                 SELECT id, "userId", "strategyName", payload, "notifyVia", 
-                       "notifyEmail", "notifyTelegram"
+                       "notifyEmail", "notifyTelegram", "notifyWhatsApp"
                 FROM "BacktestQueue"
                 WHERE status = 'queued'
                 ORDER BY "createdAt" ASC

@@ -5,6 +5,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { HetznerService } from '../hetzner/hetzner.service';
 import { Exchange } from 'ccxt';
 import * as path from 'path';
+import { NotificationService } from '../backtest/notification.service';
 
 interface ActiveJob {
   id: string;
@@ -40,9 +41,41 @@ export class StrategiesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly hetzner: HetznerService,
+    private readonly notificationService: NotificationService,
   ) {
     this.logger.log('StrategiesService initialized');
     this.checkHetznerConnection();
+  }
+
+  private async getNotificationContacts(userId: number) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        email: true,
+        telegramId: true,
+        whatsappNumber: true,
+        emailNotifications: true,
+        telegramEnabled: true,
+        whatsappEnabled: true,
+        notifyOnTrade: true,
+      },
+    });
+
+    if (!user || !user.notifyOnTrade) return null;
+
+    const notifyVia: string[] = [];
+    if (user.emailNotifications && user.email) notifyVia.push('email');
+    if (user.telegramEnabled && user.telegramId) notifyVia.push('telegram');
+    if (user.whatsappEnabled && user.whatsappNumber) notifyVia.push('whatsapp');
+
+    if (notifyVia.length === 0) return null;
+
+    return {
+      notifyVia,
+      email: user.email,
+      telegramId: user.telegramId,
+      whatsappNumber: user.whatsappNumber,
+    };
   }
 
   private async checkHetznerConnection() {
@@ -459,7 +492,7 @@ export class StrategiesService {
       this.logger.error(`[${job.id}] Buy failed: ${err.message}`);
     }
 
-    await this.prisma.trade.create({
+    const createdTrade = await this.prisma.trade.create({
       data: {
         userId: job.userId,
         strategyRunId: job.runId,
@@ -482,6 +515,17 @@ export class StrategiesService {
       where: { id: job.runId },
       data: { totalTrades: job.stats.trades },
     });
+
+    const contacts = await this.getNotificationContacts(job.userId);
+    if (contacts) {
+      await this.notificationService.notifyTrade('open', contacts, {
+        strategyName: job.id.toString(),
+        symbol,
+        side: 'buy',
+        price: actualPrice,
+        quantity: actualQty,
+      });
+    }
   }
 
   // Execute sell order
@@ -560,6 +604,19 @@ export class StrategiesService {
         totalProfit: job.stats.profit,
       },
     });
+
+    const contacts = await this.getNotificationContacts(job.userId);
+    if (contacts) {
+      await this.notificationService.notifyTrade('close', contacts, {
+        strategyName: job.id.toString(),
+        symbol: trade.symbol,
+        side: 'sell',
+        price: actualPrice,
+        quantity: trade.quantity,
+        profitLoss,
+        profitPercent,
+      });
+    }
   }
 
   // Stop job helper

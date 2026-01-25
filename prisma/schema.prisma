@@ -35,6 +35,8 @@ model User {
   // Notification preferences
   telegramId          String?
   telegramEnabled     Boolean   @default(false)
+  whatsappNumber      String?
+  whatsappEnabled     Boolean   @default(false)
   emailNotifications  Boolean   @default(true)
   notifyOnTrade       Boolean   @default(true)
   notifyOnBacktest    Boolean   @default(true)
@@ -227,6 +229,7 @@ model BacktestQueue {
   notifyVia       String    // "telegram", "email", or "both"
   notifyEmail     String?
   notifyTelegram  String?
+  notifyWhatsApp  String?
   
   // Results
   resultId        Int?      // Link to BacktestResult when complete

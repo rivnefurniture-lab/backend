@@ -144,6 +144,9 @@ export class UserController {
         subscriptionPlan: user.subscriptionPlan,
         subscriptionStatus: user.subscriptionStatus,
         telegramEnabled: user.telegramEnabled,
+        telegramId: user.telegramId,
+        whatsappNumber: user.whatsappNumber,
+        whatsappEnabled: user.whatsappEnabled,
         emailNotifications: user.emailNotifications,
         notifyOnTrade: user.notifyOnTrade,
         notifyOnBacktest: user.notifyOnBacktest,
@@ -221,6 +224,8 @@ export class UserController {
     body: {
       telegramId?: string;
       telegramEnabled?: boolean;
+      whatsappNumber?: string;
+      whatsappEnabled?: boolean;
       emailNotifications?: boolean;
       notifyOnTrade?: boolean;
       notifyOnBacktest?: boolean;
