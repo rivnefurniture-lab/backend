@@ -39,5 +39,5 @@ USER nestjs
 
 EXPOSE 8080
 
-# Run migrations then start app
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/src/main.js"]
+# Run migrations (using DIRECT_DATABASE_URL if provided) then start app
+CMD ["sh", "-c", "MIGRATION_URL=${DIRECT_DATABASE_URL:-$DATABASE_URL} DATABASE_URL=$MIGRATION_URL npx prisma migrate deploy && node dist/src/main.js"]
