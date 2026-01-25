@@ -9,15 +9,40 @@ export class NotificationService {
   private readonly emailTransporter: nodemailer.Transporter;
   private readonly twilioClient: twilio.Twilio | null;
   private readonly whatsappFrom: string | null;
+  private readonly fromEmail: string;
 
   constructor() {
-    this.emailTransporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: 'o.kytsuk@gmail.com',
-        pass: process.env.GMAIL_APP_PASSWORD || 'hvxe tvqo zuhf rdqo',
-      },
-    });
+    const smtpHost = process.env.SMTP_HOST;
+    const smtpPort = process.env.SMTP_PORT
+      ? parseInt(process.env.SMTP_PORT, 10)
+      : 587;
+    const smtpSecure =
+      process.env.SMTP_SECURE === 'true' || smtpPort === 465 || smtpPort === 994;
+    const smtpUser =
+      process.env.SMTP_USER || process.env.GMAIL_EMAIL || 'o.kytsuk@gmail.com';
+    const smtpPass =
+      process.env.SMTP_PASS ||
+      process.env.GMAIL_APP_PASSWORD ||
+      'hvxe tvqo zuhf rdqo';
+
+    this.fromEmail = process.env.SMTP_FROM || smtpUser;
+
+    if (smtpHost) {
+      this.emailTransporter = nodemailer.createTransport({
+        host: smtpHost,
+        port: smtpPort,
+        secure: smtpSecure,
+        auth: { user: smtpUser, pass: smtpPass },
+      });
+    } else {
+      this.emailTransporter = nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+          user: smtpUser,
+          pass: smtpPass,
+        },
+      });
+    }
 
     const sid = process.env.TWILIO_ACCOUNT_SID;
     const token = process.env.TWILIO_AUTH_TOKEN;
@@ -174,7 +199,7 @@ Please try again or contact support if the issue persists.
 
     try {
       await this.emailTransporter.sendMail({
-        from: '"Algotcha" <o.kytsuk@gmail.com>',
+        from: `"Algotcha" <${this.fromEmail}>`,
         to: email,
         subject,
         html,

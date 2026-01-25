@@ -29,6 +29,12 @@ GMAIL_PASSWORD = 'hvxe tvqo zuhf rdqo'
 TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
 TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
 TWILIO_WHATSAPP_FROM = os.getenv('TWILIO_WHATSAPP_FROM')
+SMTP_HOST = os.getenv('SMTP_HOST')
+SMTP_PORT = int(os.getenv('SMTP_PORT', '587'))
+SMTP_SECURE = os.getenv('SMTP_SECURE', 'false').lower() == 'true' or SMTP_PORT == 465
+SMTP_USER = os.getenv('SMTP_USER') or GMAIL_USER
+SMTP_PASS = os.getenv('SMTP_PASS') or GMAIL_PASSWORD
+SMTP_FROM = os.getenv('SMTP_FROM') or SMTP_USER
 
 # Set the data directory for backtest modules
 backtest2.DATA_DIR = '/opt/algotcha/data/historical'
@@ -88,15 +94,21 @@ def send_email(to_email, subject, html_body):
     try:
         msg = MIMEMultipart('alternative')
         msg['Subject'] = subject
-        msg['From'] = f'"Algotcha" <{GMAIL_USER}>'
+        msg['From'] = f'"Algotcha" <{SMTP_FROM}>'
         msg['To'] = to_email
         
         html_part = MIMEText(html_body, 'html')
         msg.attach(html_part)
         
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(GMAIL_USER, GMAIL_PASSWORD)
-            server.send_message(msg)
+        if SMTP_SECURE:
+            with smtplib.SMTP_SSL(SMTP_HOST or 'smtp.gmail.com', SMTP_PORT) as server:
+                server.login(SMTP_USER, SMTP_PASS)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(SMTP_HOST or 'smtp.gmail.com', SMTP_PORT) as server:
+                server.starttls()
+                server.login(SMTP_USER, SMTP_PASS)
+                server.send_message(msg)
             
         log(f"✅ Email sent to {to_email}")
     except Exception as e:
