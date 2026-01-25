@@ -39,5 +39,5 @@ USER nestjs
 
 EXPOSE 8080
 
-# Start app directly - the app has built-in database retry logic
-CMD ["node", "dist/src/main.js"]
+# Run migrations then start app
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/src/main.js"]
