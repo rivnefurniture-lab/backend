@@ -793,8 +793,10 @@ export class BacktestController {
       body.payload,
       body.notifyVia,
       body.notifyEmail || user.email,
-      body.notifyTelegram || (user.telegramEnabled ? user.telegramId : undefined),
-      body.notifyWhatsapp || (user.whatsappEnabled ? user.whatsappNumber : null),
+      body.notifyTelegram ??
+        (user.telegramEnabled && user.telegramId ? user.telegramId : undefined),
+      body.notifyWhatsapp ??
+        (user.whatsappEnabled && user.whatsappNumber ? user.whatsappNumber : null),
     );
 
     return {
