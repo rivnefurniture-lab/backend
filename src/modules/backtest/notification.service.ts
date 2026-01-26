@@ -1,57 +1,23 @@
 import { Injectable } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
-import twilio from 'twilio';
 
 @Injectable()
 export class NotificationService {
   private readonly telegramToken =
-    process.env.TELEGRAM_BOT_TOKEN || '8573074509:AAHDMYFF0WM6zSGkkhKHVNLTypxbw';
+    process.env.TELEGRAM_BOT_TOKEN ||
+    '8442839897:AAHL5H0Zb5wOZBhiOEBKuUluVZFBnsXu704';
   private readonly emailTransporter: nodemailer.Transporter;
-  private readonly twilioClient: twilio.Twilio | null;
-  private readonly whatsappFrom: string | null;
-  private readonly fromEmail: string;
 
   constructor() {
-    const smtpHost = process.env.SMTP_HOST;
-    const smtpPort = process.env.SMTP_PORT
-      ? parseInt(process.env.SMTP_PORT, 10)
-      : 587;
-    const smtpSecure =
-      process.env.SMTP_SECURE === 'true' || smtpPort === 465 || smtpPort === 994;
-    const smtpUser =
-      process.env.SMTP_USER || process.env.GMAIL_EMAIL || 'o.kytsuk@gmail.com';
-    const smtpPass =
-      process.env.SMTP_PASS ||
-      process.env.GMAIL_APP_PASSWORD ||
-      'hvxe tvqo zuhf rdqo';
+    // Setup email transporter with Gmail
 
-    this.fromEmail = process.env.SMTP_FROM || smtpUser;
-
-    if (smtpHost) {
-      this.emailTransporter = nodemailer.createTransport({
-        host: smtpHost,
-        port: smtpPort,
-        secure: smtpSecure,
-        auth: { user: smtpUser, pass: smtpPass },
-      });
-    } else {
-      this.emailTransporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: {
-          user: smtpUser,
-          pass: smtpPass,
-        },
-      });
-    }
-
-    const sid = process.env.TWILIO_ACCOUNT_SID;
-    const token = process.env.TWILIO_AUTH_TOKEN;
-    this.whatsappFrom = process.env.TWILIO_WHATSAPP_FROM || null;
-    if (sid && token) {
-      this.twilioClient = twilio(sid, token);
-    } else {
-      this.twilioClient = null;
-    }
+    this.emailTransporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: 'o.kytsuk@gmail.com',
+        pass: process.env.GMAIL_APP_PASSWORD || 'hvxe tvqo zuhf rdqo',
+      },
+    });
   }
 
   async sendTelegramNotification(
@@ -199,7 +165,7 @@ Please try again or contact support if the issue persists.
 
     try {
       await this.emailTransporter.sendMail({
-        from: `"Algotcha" <${this.fromEmail}>`,
+        from: '"Algotcha" <o.kytsuk@gmail.com>',
         to: email,
         subject,
         html,
@@ -209,76 +175,10 @@ Please try again or contact support if the issue persists.
     }
   }
 
-  async sendWhatsAppNotification(
-    whatsappNumber: string,
-    strategyName: string,
-    metrics: any,
-    status: 'completed' | 'failed',
-    error?: string,
-  ) {
-    if (!whatsappNumber || !this.twilioClient || !this.whatsappFrom) return;
-
-    const lines =
-      status === 'completed'
-        ? [
-            `🎉 Backtest Complete: ${strategyName}`,
-            `Return: ${(metrics.net_profit * 100 || 0).toFixed(2)}%`,
-            `Win Rate: ${(metrics.win_rate * 100 || 0).toFixed(2)}%`,
-            `Max DD: ${(metrics.max_drawdown * 100 || 0).toFixed(2)}%`,
-            `Trades: ${metrics.total_trades || 0}`,
-            `Profit Factor: ${(metrics.profit_factor || 0).toFixed(2)}x`,
-            `Open dashboard for details.`,
-          ]
-        : [
-            `❌ Backtest Failed: ${strategyName}`,
-            `Error: ${error || 'Unknown error'}`,
-          ];
-
-    try {
-      await this.twilioClient.messages.create({
-        from: this.whatsappFrom,
-        to: whatsappNumber.startsWith('whatsapp:')
-          ? whatsappNumber
-          : `whatsapp:${whatsappNumber}`,
-        body: lines.join('\n'),
-      });
-    } catch (error) {
-      console.error('Failed to send WhatsApp notification:', error);
-    }
-  }
-
-  private async sendTelegramText(chatId: string, message: string) {
-    if (!chatId) return;
-    const url = `https://api.telegram.org/bot${this.telegramToken}/sendMessage`;
-    await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: message,
-        parse_mode: 'Markdown',
-      }),
-    }).catch((err) => console.error('Telegram send error', err));
-  }
-
-  private async sendWhatsAppText(to: string, message: string) {
-    if (!to || !this.twilioClient || !this.whatsappFrom) return;
-    try {
-      await this.twilioClient.messages.create({
-        from: this.whatsappFrom,
-        to: to.startsWith('whatsapp:') ? to : `whatsapp:${to}`,
-        body: message,
-      });
-    } catch (err) {
-      console.error('WhatsApp send error:', err);
-    }
-  }
-
   async notifyUser(
     notifyVia: string,
     email: string,
     telegramId: string | null,
-    whatsappNumber: string | null,
     strategyName: string,
     metrics: any,
     status: 'completed' | 'failed',
@@ -286,20 +186,13 @@ Please try again or contact support if the issue persists.
   ) {
     const promises: Promise<void>[] = [];
 
-    const wantsEmail =
-      notifyVia === 'email' || notifyVia === 'both' || notifyVia === 'all';
-    const wantsTelegram =
-      notifyVia === 'telegram' || notifyVia === 'both' || notifyVia === 'all';
-    const wantsWhatsApp =
-      notifyVia === 'whatsapp' || notifyVia === 'all';
-
-    if (wantsEmail) {
+    if (notifyVia === 'email' || notifyVia === 'both') {
       promises.push(
         this.sendEmailNotification(email, strategyName, metrics, status, error),
       );
     }
 
-    if (wantsTelegram && telegramId) {
+    if ((notifyVia === 'telegram' || notifyVia === 'both') && telegramId) {
       promises.push(
         this.sendTelegramNotification(
           telegramId,
@@ -311,94 +204,6 @@ Please try again or contact support if the issue persists.
       );
     }
 
-    if (wantsWhatsApp && whatsappNumber) {
-      promises.push(
-        this.sendWhatsAppNotification(
-          whatsappNumber,
-          strategyName,
-          metrics,
-          status,
-          error,
-        ),
-      );
-    }
-
     await Promise.all(promises);
-  }
-
-  async notifyTrade(
-    channel: 'open' | 'close',
-    contacts: {
-      notifyVia: string[];
-      email?: string;
-      telegramId?: string | null;
-      whatsappNumber?: string | null;
-    },
-    payload: {
-      strategyName: string;
-      symbol: string;
-      side: 'buy' | 'sell';
-      price: number;
-      quantity: number;
-      profitLoss?: number;
-      profitPercent?: number;
-    },
-  ) {
-    const { strategyName, symbol, side, price, quantity, profitLoss, profitPercent } = payload;
-    const baseLines =
-      channel === 'open'
-        ? [
-            `🚀 Live trade opened`,
-            `Strategy: ${strategyName}`,
-            `${side.toUpperCase()} ${quantity.toFixed(4)} ${symbol}`,
-            `Price: ${price}`,
-          ]
-        : [
-            `✅ Trade closed`,
-            `Strategy: ${strategyName}`,
-            `${side.toUpperCase()} ${quantity.toFixed(4)} ${symbol}`,
-            `Exit: ${price}`,
-            `P/L: ${profitLoss?.toFixed(2) ?? 0} (${profitPercent?.toFixed(2) ?? 0}%)`,
-          ];
-
-    const wantsEmail = contacts.notifyVia.includes('email');
-    const wantsTelegram = contacts.notifyVia.includes('telegram');
-    const wantsWhatsApp = contacts.notifyVia.includes('whatsapp');
-
-    const tasks: Promise<void>[] = [];
-
-    if (wantsEmail && contacts.email) {
-      tasks.push(
-        this.emailTransporter
-          .sendMail({
-            from: '"Algotcha" <o.kytsuk@gmail.com>',
-            to: contacts.email,
-            subject: channel === 'open' ? '🚀 Live Trade Opened' : '✅ Trade Closed',
-            text: baseLines.join('\n'),
-          })
-          .then(() => undefined)
-          .catch((err) => {
-            console.error('Trade email failed:', err);
-          }),
-      );
-    }
-
-    if (wantsTelegram && contacts.telegramId) {
-      tasks.push(
-        this.sendTelegramText(contacts.telegramId, baseLines.join('\n')).catch(
-          () => undefined,
-        ),
-      );
-    }
-
-    if (wantsWhatsApp && contacts.whatsappNumber) {
-      tasks.push(
-        this.sendWhatsAppText(contacts.whatsappNumber, baseLines.join('\n')).catch(
-          () => undefined,
-        ),
-      );
-    }
-
-    await Promise.all(tasks);
   }
 }
