@@ -206,4 +206,94 @@ Please try again or contact support if the issue persists.
 
     await Promise.all(promises);
   }
+
+  /**
+   * Trade execution notifications (for live trading). Lightweight to avoid blocking.
+   */
+  async notifyTrade(
+    type: 'open' | 'close',
+    contacts: { email?: string; telegramId?: string | null },
+    payload: {
+      symbol?: string;
+      side?: string;
+      price?: number;
+      quantity?: number;
+      profitLoss?: number;
+      profitPercent?: number;
+    },
+  ): Promise<void> {
+    const { email, telegramId } = contacts;
+
+    // Telegram
+    if (telegramId) {
+      const text = [
+        type === 'open' ? '🚀 Trade Opened' : '✅ Trade Closed',
+        payload.symbol ? `Symbol: ${payload.symbol}` : null,
+        payload.side ? `Side: ${payload.side}` : null,
+        payload.quantity ? `Qty: ${payload.quantity}` : null,
+        payload.price ? `Price: ${payload.price}` : null,
+        type === 'close' && payload.profitLoss !== undefined
+          ? `PnL: ${payload.profitLoss.toFixed(2)} (${(payload.profitPercent || 0).toFixed(2)}%)`
+          : null,
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      try {
+        await fetch(
+          `https://api.telegram.org/bot${this.telegramToken}/sendMessage`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: telegramId,
+              text,
+            }),
+          },
+        );
+      } catch (error) {
+        console.error('Failed to send Telegram trade notification:', error);
+      }
+    }
+
+    // Email
+    if (email) {
+      const subject =
+        type === 'open' ? 'Trade Opened Notification' : 'Trade Closed Notification';
+      const rows = [
+        payload.symbol ? `<tr><td><strong>Symbol</strong></td><td>${payload.symbol}</td></tr>` : '',
+        payload.side ? `<tr><td><strong>Side</strong></td><td>${payload.side}</td></tr>` : '',
+        payload.quantity
+          ? `<tr><td><strong>Quantity</strong></td><td>${payload.quantity}</td></tr>`
+          : '',
+        payload.price
+          ? `<tr><td><strong>Price</strong></td><td>${payload.price}</td></tr>`
+          : '',
+        type === 'close' && payload.profitLoss !== undefined
+          ? `<tr><td><strong>PnL</strong></td><td>${payload.profitLoss.toFixed(
+              2,
+            )} (${(payload.profitPercent || 0).toFixed(2)}%)</td></tr>`
+          : '',
+      ].join('');
+
+      const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>${type === 'open' ? '🚀 Trade Opened' : '✅ Trade Closed'}</h2>
+          <table style="width: 100%; border-collapse: collapse;">${rows}</table>
+          <p style="color:#6b7280;font-size:14px;margin-top:16px">Notification from Algotcha</p>
+        </div>
+      `;
+
+      try {
+        await this.emailTransporter.sendMail({
+          from: '"Algotcha" <o.kytsuk@gmail.com>',
+          to: email,
+          subject,
+          html,
+        });
+      } catch (error) {
+        console.error('Failed to send trade email notification:', error);
+      }
+    }
+  }
 }
