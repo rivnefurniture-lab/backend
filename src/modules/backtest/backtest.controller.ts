@@ -601,13 +601,10 @@ export class BacktestController {
   async getResults(@Req() req: AuthenticatedRequest) {
     try {
       const userId = await this.getUserId(req);
-      const forceFresh =
-        (req.query?.noCache as string | undefined)?.toString() === '1' ||
-        (req.query?.fresh as string | undefined)?.toString() === '1';
 
-      // Check cache first (unless bypassed)
+      // Check cache first
       const cached = this.resultsCache.get(userId);
-      if (!forceFresh && cached && Date.now() - cached.timestamp < this.RESULTS_CACHE_TTL_MS) {
+      if (cached && Date.now() - cached.timestamp < this.RESULTS_CACHE_TTL_MS) {
         console.log(`[getResults] Cache hit for userId: ${userId}`);
         return cached.data;
       }
@@ -754,13 +751,7 @@ export class BacktestController {
   async addToQueue(
     @Req() req: AuthenticatedRequest,
     @Body()
-    body: {
-      payload: RunBacktestDto;
-      notifyVia: 'telegram' | 'email' | 'both' | 'whatsapp' | 'all';
-      notifyWhatsapp?: string;
-      notifyEmail?: string;
-      notifyTelegram?: string;
-    },
+    body: { payload: RunBacktestDto; notifyVia: 'telegram' | 'email' | 'both' },
   ) {
     const userId = await this.getUserId(req);
 
@@ -776,14 +767,7 @@ export class BacktestController {
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: {
-        email: true,
-        telegramId: true,
-        whatsappNumber: true,
-        whatsappEnabled: true,
-        emailNotifications: true,
-        telegramEnabled: true,
-      },
+      select: { email: true, telegramId: true },
     });
 
     if (!user) {
@@ -795,11 +779,8 @@ export class BacktestController {
       body.payload.strategy_name || 'My Strategy',
       body.payload,
       body.notifyVia,
-      body.notifyEmail || user.email,
-      body.notifyTelegram ??
-        (user.telegramEnabled && user.telegramId ? user.telegramId : undefined),
-      body.notifyWhatsapp ??
-        (user.whatsappEnabled && user.whatsappNumber ? user.whatsappNumber : null),
+      user.email,
+      user.telegramId || undefined,
     );
 
     return {
@@ -1084,6 +1065,16 @@ export class BacktestController {
             where: { status: { in: ['queued', 'processing'] } },
             orderBy: { createdAt: 'desc' },
             take: 5, // Limit to 5 active backtests
+            select: {
+              id: true,
+              strategyName: true,
+              status: true,
+              progress: true,
+              payload: true,
+              startedAt: true,
+              createdAt: true,
+              notifyVia: true,
+            },
           },
         },
       });
@@ -1095,10 +1086,10 @@ export class BacktestController {
 
       // Use actual progress from DB (updated by worker) + calculate remaining time
       const result = user.backtestQueue.map((item, index) => {
-        // Progress as reported by worker
+        // Use actual progress from database (worker updates this)
         const progress = item.progress || 0;
 
-        // Estimate total duration from payload (more accurate than static 2 min)
+        // Estimate total duration from payload for better accuracy
         let totalEstimated = 120;
         try {
           const payload = item.payload ? JSON.parse(item.payload as any) : null;
@@ -1108,11 +1099,10 @@ export class BacktestController {
               Math.min(900, this.queueService.estimateBacktestTime(payload)),
             );
           }
-        } catch (e) {
+        } catch {
           totalEstimated = 120;
         }
 
-        // Estimate remaining based on elapsed + progress
         let estimatedRemaining = totalEstimated;
         if (item.status === 'processing') {
           if (item.startedAt) {
@@ -1126,8 +1116,9 @@ export class BacktestController {
             }
           }
         } else if (item.status === 'queued') {
-          // Rough ETA using position in queue (assume 60s each ahead)
-          estimatedRemaining = Math.max(30, totalEstimated + index * 60);
+          // Rough ETA using position in queue (assume ~1.2x estimated per item ahead)
+          const perItem = Math.max(45, Math.min(240, totalEstimated * 1.2));
+          estimatedRemaining = Math.max(30, perItem * index + totalEstimated);
         } else {
           estimatedRemaining = 0;
         }
