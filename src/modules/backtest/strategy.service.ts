@@ -6,7 +6,6 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ExchangeService } from '../exchange/exchange.service';
-import { NotificationService } from './notification.service';
 
 interface StrategyConfig {
   entry_conditions: any[];
@@ -28,7 +27,6 @@ export class StrategyService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly exchangeService: ExchangeService,
-    private readonly notificationService: NotificationService,
   ) {}
 
   // ==================== STRATEGY CRUD ====================

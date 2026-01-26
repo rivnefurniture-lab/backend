@@ -940,70 +940,38 @@ print(json.dumps(result))
   }
 
   async getBacktestResults(userId?: number) {
-    // Use a raw query to safely handle NaN floats (Prisma cannot hydrate NaN)
-    const rows: Array<{
-      id: number;
-      name: string;
-      createdAt: Date;
-      netProfit: number | null;
-      maxDrawdown: number | null;
-      sharpeRatio: number | null;
-      sortinoRatio: number | null;
-      totalTrades: number | null;
-      winRate: number | null;
-      yearlyReturn: number | null;
-    }> = await this.prisma.$queryRawUnsafe(
-      `
-      SELECT
-        id,
-        name,
-        "createdAt",
-        NULLIF("netProfit", 'NaN')      AS "netProfit",
-        NULLIF("maxDrawdown", 'NaN')    AS "maxDrawdown",
-        NULLIF("sharpeRatio", 'NaN')    AS "sharpeRatio",
-        NULLIF("sortinoRatio", 'NaN')   AS "sortinoRatio",
-        "totalTrades",
-        "winRate",
-        NULLIF("yearlyReturn", 'NaN')   AS "yearlyReturn"
-      FROM "BacktestResult"
-      ${userId ? 'WHERE "userId" = $1' : ''}
-      ORDER BY "createdAt" DESC
-      LIMIT 50
-      `,
-      ...(userId ? [userId] : []),
-    );
-
-    const resultIds = rows.map((r) => r.id);
-    const queueItems = resultIds.length
-      ? await this.prisma.backtestQueue.findMany({
-          where: { resultId: { in: resultIds } },
-          select: { resultId: true, startedAt: true, completedAt: true },
-        })
-      : [];
-
+    const results = await this.prisma.backtestResult.findMany({
+      where: userId ? { userId } : {},
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+    
+    // Get duration info from BacktestQueue if available
+    const resultIds = results.map(r => r.id);
+    const queueItems = await this.prisma.backtestQueue.findMany({
+      where: { resultId: { in: resultIds } },
+      select: { resultId: true, startedAt: true, completedAt: true },
+    });
+    
     const durationMap = new Map<number, number>();
     for (const q of queueItems) {
       if (q.resultId && q.startedAt && q.completedAt) {
-        const durationMs =
-          new Date(q.completedAt).getTime() - new Date(q.startedAt).getTime();
-        durationMap.set(q.resultId, Math.round(durationMs / 1000));
+        const durationMs = new Date(q.completedAt).getTime() - new Date(q.startedAt).getTime();
+        durationMap.set(q.resultId, Math.round(durationMs / 1000)); // Duration in seconds
       }
     }
-
-    const safeNum = (v: number | null | undefined) =>
-      Number.isFinite(v as number) ? (v as number) : 0;
-
-    return rows.map((r) => ({
+    
+    return results.map((r) => ({
       id: r.id,
       strategy_name: r.name,
       timestamp_run: r.createdAt.toISOString(),
-      net_profit: safeNum(r.netProfit),
-      max_drawdown: safeNum(r.maxDrawdown),
-      sharpe_ratio: safeNum(r.sharpeRatio),
-      total_trades: safeNum(r.totalTrades),
-      win_rate: safeNum(r.winRate),
-      yearly_return: safeNum(r.yearlyReturn),
-      duration_seconds: durationMap.get(r.id) || null,
+      net_profit: r.netProfit,
+      max_drawdown: r.maxDrawdown,
+      sharpe_ratio: r.sharpeRatio,
+      total_trades: r.totalTrades,
+      win_rate: r.winRate,
+      yearly_return: r.yearlyReturn,
+      duration_seconds: durationMap.get(r.id) || null, // Duration in seconds
     }));
   }
 

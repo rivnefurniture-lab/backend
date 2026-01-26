@@ -39,5 +39,5 @@ USER nestjs
 
 EXPOSE 8080
 
-# Optionally run migrations on start (set MIGRATE_ON_START=true) then start app
-CMD ["sh", "-c", "if [ \"$MIGRATE_ON_START\" = \"true\" ]; then MIGRATION_URL=${DIRECT_DATABASE_URL:-$DATABASE_URL} DATABASE_URL=$MIGRATION_URL npx prisma migrate deploy; fi; node dist/src/main.js"]
+# Start app directly - the app has built-in database retry logic
+CMD ["node", "dist/src/main.js"]

@@ -595,8 +595,6 @@ export class BacktestController {
   // Cache for backtest results (30 second TTL per user)
   private resultsCache = new Map<number, { data: any[]; timestamp: number }>();
   private readonly RESULTS_CACHE_TTL_MS = 30000; // 30 seconds
-  // Share in-flight fetches per user to avoid hammering the DB/pool
-  private inflightResults = new Map<number, Promise<any[]>>();
 
   @UseGuards(JwtAuthGuard)
   @Get('results')
@@ -607,28 +605,20 @@ export class BacktestController {
       // Check cache first
       const cached = this.resultsCache.get(userId);
       if (cached && Date.now() - cached.timestamp < this.RESULTS_CACHE_TTL_MS) {
+        console.log(`[getResults] Cache hit for userId: ${userId}`);
         return cached.data;
       }
 
-      // Deduplicate concurrent requests
-      const existing = this.inflightResults.get(userId);
-      if (existing) {
-        return existing;
-      }
+      console.log(`[getResults] Fetching results for userId: ${userId}`);
+      const results = await this.backtestService.getBacktestResults(userId);
+      console.log(`[getResults] Found ${results.length} results`);
 
-      const fetchPromise = (async () => {
-        const results = await this.backtestService.getBacktestResults(userId);
-        this.resultsCache.set(userId, { data: results, timestamp: Date.now() });
-        return results;
-      })();
+      // Cache the result
+      this.resultsCache.set(userId, { data: results, timestamp: Date.now() });
 
-      this.inflightResults.set(userId, fetchPromise);
-      try {
-        return await fetchPromise;
-      } finally {
-        this.inflightResults.delete(userId);
-      }
+      return results;
     } catch (error) {
+      console.error('[getResults] Error:', error);
       throw error;
     }
   }
@@ -1075,16 +1065,6 @@ export class BacktestController {
             where: { status: { in: ['queued', 'processing'] } },
             orderBy: { createdAt: 'desc' },
             take: 5, // Limit to 5 active backtests
-            select: {
-              id: true,
-              strategyName: true,
-              status: true,
-              progress: true,
-              payload: true,
-              startedAt: true,
-              createdAt: true,
-              notifyVia: true,
-            },
           },
         },
       });
@@ -1098,39 +1078,13 @@ export class BacktestController {
       const result = user.backtestQueue.map((item, index) => {
         // Use actual progress from database (worker updates this)
         const progress = item.progress || 0;
-
-        // Estimate total duration from payload for better accuracy
-        let totalEstimated = 120;
-        try {
-          const payload = item.payload ? JSON.parse(item.payload as any) : null;
-          if (payload) {
-            totalEstimated = Math.max(
-              30,
-              Math.min(900, this.queueService.estimateBacktestTime(payload)),
-            );
-          }
-        } catch {
-          totalEstimated = 120;
-        }
+        // Use estimated duration from database if available, otherwise default
+        const totalEstimated = (item as any).estimatedSeconds || 120;
 
         let estimatedRemaining = totalEstimated;
-        if (item.status === 'processing') {
-          if (item.startedAt) {
-            const elapsed = (Date.now() - item.startedAt.getTime()) / 1000;
-            if (progress > 0) {
-              const estTotalFromProgress = elapsed / Math.max(progress / 100, 0.01);
-              estimatedRemaining = Math.max(3, estTotalFromProgress - elapsed);
-              totalEstimated = Math.max(totalEstimated, estTotalFromProgress);
-            } else {
-              estimatedRemaining = Math.max(3, totalEstimated - elapsed);
-            }
-          }
-        } else if (item.status === 'queued') {
-          // Rough ETA using position in queue (assume ~1.2x estimated per item ahead)
-          const perItem = Math.max(45, Math.min(240, totalEstimated * 1.2));
-          estimatedRemaining = Math.max(30, perItem * index + totalEstimated);
-        } else {
-          estimatedRemaining = 0;
+        if (item.status === 'processing' && progress > 0) {
+          // Calculate remaining based on actual progress
+          estimatedRemaining = Math.max(5, totalEstimated * (1 - progress / 100));
         }
 
         return {
@@ -1139,8 +1093,8 @@ export class BacktestController {
           status: item.status,
           queuePosition: index + 1,
           progress,
-          estimatedSeconds: Math.round(totalEstimated),
-          estimatedRemaining: Math.round(estimatedRemaining),
+          estimatedSeconds: totalEstimated,
+          estimatedRemaining,
           estimatedCompletion: new Date(Date.now() + estimatedRemaining * 1000).toISOString(),
           startedAt: item.startedAt,
           createdAt: item.createdAt,
@@ -1397,3 +1351,4 @@ export class BacktestController {
     }
   }
 }
+

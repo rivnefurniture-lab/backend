@@ -5,7 +5,7 @@ import * as nodemailer from 'nodemailer';
 export class NotificationService {
   private readonly telegramToken =
     process.env.TELEGRAM_BOT_TOKEN ||
-    '8442839897:AAHL5H0Zb5wOZBhiOEBKuUluVZFBnsXu704';
+    '8573074509:AAHDMYFF0WM6zSGkkhKHVNLTypxbw';
   private readonly emailTransporter: nodemailer.Transporter;
 
   constructor() {
@@ -208,7 +208,7 @@ Please try again or contact support if the issue persists.
   }
 
   /**
-   * Trade execution notifications (for live trading). Lightweight to avoid blocking.
+   * Trade execution notifications (live trading).
    */
   async notifyTrade(
     type: 'open' | 'close',
@@ -220,6 +220,7 @@ Please try again or contact support if the issue persists.
       quantity?: number;
       profitLoss?: number;
       profitPercent?: number;
+      strategyName?: string;
     },
   ): Promise<void> {
     const { email, telegramId } = contacts;
@@ -228,6 +229,7 @@ Please try again or contact support if the issue persists.
     if (telegramId) {
       const text = [
         type === 'open' ? '🚀 Trade Opened' : '✅ Trade Closed',
+        payload.strategyName ? `Strategy: ${payload.strategyName}` : null,
         payload.symbol ? `Symbol: ${payload.symbol}` : null,
         payload.side ? `Side: ${payload.side}` : null,
         payload.quantity ? `Qty: ${payload.quantity}` : null,
@@ -261,6 +263,9 @@ Please try again or contact support if the issue persists.
       const subject =
         type === 'open' ? 'Trade Opened Notification' : 'Trade Closed Notification';
       const rows = [
+        payload.strategyName
+          ? `<tr><td><strong>Strategy</strong></td><td>${payload.strategyName}</td></tr>`
+          : '',
         payload.symbol ? `<tr><td><strong>Symbol</strong></td><td>${payload.symbol}</td></tr>` : '',
         payload.side ? `<tr><td><strong>Side</strong></td><td>${payload.side}</td></tr>` : '',
         payload.quantity
