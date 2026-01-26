@@ -5,7 +5,8 @@ import * as nodemailer from 'nodemailer';
 export class NotificationService {
   private readonly telegramToken =
     process.env.TELEGRAM_BOT_TOKEN ||
-    '8573074509:AAHDMYFF0WM6zSGkkhKHVNLTypxbw';
+    // Fallback token for algotcha_results_bot
+    '8442839897:AAHL5H0Zb5wOZBhiOEBKuUluVZFBnsXu704';
   private readonly emailTransporter: nodemailer.Transporter;
 
   constructor() {
