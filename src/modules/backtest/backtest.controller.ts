@@ -601,10 +601,13 @@ export class BacktestController {
   async getResults(@Req() req: AuthenticatedRequest) {
     try {
       const userId = await this.getUserId(req);
+      const forceFresh =
+        (req.query?.noCache as string | undefined)?.toString() === '1' ||
+        (req.query?.fresh as string | undefined)?.toString() === '1';
 
-      // Check cache first
+      // Check cache first (unless bypassed)
       const cached = this.resultsCache.get(userId);
-      if (cached && Date.now() - cached.timestamp < this.RESULTS_CACHE_TTL_MS) {
+      if (!forceFresh && cached && Date.now() - cached.timestamp < this.RESULTS_CACHE_TTL_MS) {
         console.log(`[getResults] Cache hit for userId: ${userId}`);
         return cached.data;
       }
@@ -1092,15 +1095,41 @@ export class BacktestController {
 
       // Use actual progress from DB (updated by worker) + calculate remaining time
       const result = user.backtestQueue.map((item, index) => {
-        // Use actual progress from database (worker updates this)
+        // Progress as reported by worker
         const progress = item.progress || 0;
-        // Use estimated duration from database if available, otherwise default
-        const totalEstimated = (item as any).estimatedSeconds || 120;
 
+        // Estimate total duration from payload (more accurate than static 2 min)
+        let totalEstimated = 120;
+        try {
+          const payload = item.payload ? JSON.parse(item.payload as any) : null;
+          if (payload) {
+            totalEstimated = Math.max(
+              30,
+              Math.min(900, this.queueService.estimateBacktestTime(payload)),
+            );
+          }
+        } catch (e) {
+          totalEstimated = 120;
+        }
+
+        // Estimate remaining based on elapsed + progress
         let estimatedRemaining = totalEstimated;
-        if (item.status === 'processing' && progress > 0) {
-          // Calculate remaining based on actual progress
-          estimatedRemaining = Math.max(5, totalEstimated * (1 - progress / 100));
+        if (item.status === 'processing') {
+          if (item.startedAt) {
+            const elapsed = (Date.now() - item.startedAt.getTime()) / 1000;
+            if (progress > 0) {
+              const estTotalFromProgress = elapsed / Math.max(progress / 100, 0.01);
+              estimatedRemaining = Math.max(3, estTotalFromProgress - elapsed);
+              totalEstimated = Math.max(totalEstimated, estTotalFromProgress);
+            } else {
+              estimatedRemaining = Math.max(3, totalEstimated - elapsed);
+            }
+          }
+        } else if (item.status === 'queued') {
+          // Rough ETA using position in queue (assume 60s each ahead)
+          estimatedRemaining = Math.max(30, totalEstimated + index * 60);
+        } else {
+          estimatedRemaining = 0;
         }
 
         return {
@@ -1109,8 +1138,8 @@ export class BacktestController {
           status: item.status,
           queuePosition: index + 1,
           progress,
-          estimatedSeconds: totalEstimated,
-          estimatedRemaining,
+          estimatedSeconds: Math.round(totalEstimated),
+          estimatedRemaining: Math.round(estimatedRemaining),
           estimatedCompletion: new Date(Date.now() + estimatedRemaining * 1000).toISOString(),
           startedAt: item.startedAt,
           createdAt: item.createdAt,
