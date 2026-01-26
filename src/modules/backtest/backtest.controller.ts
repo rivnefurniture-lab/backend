@@ -595,6 +595,8 @@ export class BacktestController {
   // Cache for backtest results (30 second TTL per user)
   private resultsCache = new Map<number, { data: any[]; timestamp: number }>();
   private readonly RESULTS_CACHE_TTL_MS = 30000; // 30 seconds
+  // Share in-flight fetches per user to avoid hammering the DB/pool
+  private inflightResults = new Map<number, Promise<any[]>>();
 
   @UseGuards(JwtAuthGuard)
   @Get('results')
@@ -605,20 +607,28 @@ export class BacktestController {
       // Check cache first
       const cached = this.resultsCache.get(userId);
       if (cached && Date.now() - cached.timestamp < this.RESULTS_CACHE_TTL_MS) {
-        console.log(`[getResults] Cache hit for userId: ${userId}`);
         return cached.data;
       }
 
-      console.log(`[getResults] Fetching results for userId: ${userId}`);
-      const results = await this.backtestService.getBacktestResults(userId);
-      console.log(`[getResults] Found ${results.length} results`);
+      // Deduplicate concurrent requests
+      const existing = this.inflightResults.get(userId);
+      if (existing) {
+        return existing;
+      }
 
-      // Cache the result
-      this.resultsCache.set(userId, { data: results, timestamp: Date.now() });
+      const fetchPromise = (async () => {
+        const results = await this.backtestService.getBacktestResults(userId);
+        this.resultsCache.set(userId, { data: results, timestamp: Date.now() });
+        return results;
+      })();
 
-      return results;
+      this.inflightResults.set(userId, fetchPromise);
+      try {
+        return await fetchPromise;
+      } finally {
+        this.inflightResults.delete(userId);
+      }
     } catch (error) {
-      console.error('[getResults] Error:', error);
       throw error;
     }
   }
