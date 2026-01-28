@@ -9,7 +9,7 @@ import { BacktestModule } from './modules/backtest/backtest.module';
 import { TradesModule } from './modules/trades/trades.module';
 import { RefundModule } from './modules/refund/refund.module';
 import { UserModule } from './modules/user/user.module';
-import { HetznerModule } from './modules/hetzner/hetzner.module';
+import { DataServerModule } from './modules/data-server/data-server.module';
 import { SubscriptionModule } from './modules/subscription/subscription.module';
 import { ConfigModule } from '@nestjs/config';
 import { HealthController } from './health.controller';
@@ -17,7 +17,7 @@ import { HealthController } from './health.controller';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
-    HetznerModule, // Global - provides data access
+    DataServerModule, // Global - provides Contabo data server access
     CommentsModule,
     SseModule,
     ExchangeModule,

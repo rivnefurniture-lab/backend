@@ -7,7 +7,7 @@ import {
   HttpException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
-import { HetznerService } from './modules/hetzner/hetzner.service';
+import { DataServerService } from './modules/data-server/data-server.service';
 
 @ApiTags('Health')
 @Controller()
@@ -16,7 +16,7 @@ export class HealthController {
   private readonly supabaseKey =
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFtY2hzZGVubWNiZHBhb2Ftb2llIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk3NjA1MjcsImV4cCI6MjA3NTMzNjUyN30.tHWks2yIwBCFqQhAHTqv3Jycr_XB48aRVY4tOuBsHas';
 
-  constructor(private readonly hetzner: HetznerService) {}
+  constructor(private readonly dataServer: DataServerService) {}
 
   @Get()
   @Header('Content-Type', 'application/json')
@@ -34,8 +34,8 @@ export class HealthController {
   @Header('Content-Type', 'application/json')
   @ApiOperation({ summary: 'Health check endpoint' })
   async health() {
-    const hetznerHealthy = await this.hetzner.isHealthy();
-    const hetznerStatus = await this.hetzner.getDataStatus();
+    const dataServerHealthy = await this.dataServer.isHealthy();
+    const dataServerStatus = await this.dataServer.getDataStatus();
 
     return {
       status: 'healthy',
@@ -43,10 +43,10 @@ export class HealthController {
       timestamp: new Date().toISOString(),
       environment: process.env.NODE_ENV || 'development',
       dataServer: {
-        connected: hetznerHealthy,
-        url: process.env.HETZNER_DATA_URL || 'http://46.224.99.27:5000',
-        files: hetznerStatus.fileCount,
-        hasData: hetznerStatus.hasData,
+        connected: dataServerHealthy,
+        url: process.env.DATA_SERVER_URL || 'http://62.171.183.32:5000',
+        files: dataServerStatus.fileCount,
+        hasData: dataServerStatus.hasData,
       },
     };
   }

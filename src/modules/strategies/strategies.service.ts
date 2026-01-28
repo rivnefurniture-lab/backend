@@ -2,7 +2,7 @@ import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { StartStrategyDto } from './dto/start-strategy.dto';
 import { StopStrategyDto } from './dto/stop-strategy.dto';
 import { PrismaService } from '../../prisma/prisma.service';
-import { HetznerService } from '../hetzner/hetzner.service';
+import { DataServerService } from '../data-server/data-server.service';
 import { Exchange } from 'ccxt';
 import * as path from 'path';
 
@@ -39,19 +39,19 @@ export class StrategiesService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly hetzner: HetznerService,
+    private readonly dataServer: DataServerService,
   ) {
     this.logger.log('StrategiesService initialized');
-    this.checkHetznerConnection();
+    this.checkDataServerConnection();
   }
 
-  private async checkHetznerConnection() {
-    const healthy = await this.hetzner.isHealthy();
+  private async checkDataServerConnection() {
+    const healthy = await this.dataServer.isHealthy();
     if (healthy) {
-      this.logger.log('✅ Hetzner data server connected');
+      this.logger.log('✅ Contabo data server connected');
     } else {
       this.logger.warn(
-        '⚠️ Hetzner data server not available - live trading may not work',
+        '⚠️ Contabo data server not available - live trading may not work',
       );
     }
   }
@@ -362,10 +362,10 @@ export class StrategiesService {
 
       for (const symbol of job.symbols) {
         try {
-          // Read latest data from Hetzner data server
-          const data = await this.hetzner.getLatestData(symbol);
+          // Read latest data from Contabo data server
+          const data = await this.dataServer.getLatestData(symbol);
           if (!data) {
-            this.logger.warn(`[${job.id}] No data for ${symbol} from Hetzner`);
+            this.logger.warn(`[${job.id}] No data for ${symbol} from data server`);
             continue;
           }
 

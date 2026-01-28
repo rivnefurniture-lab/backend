@@ -34,17 +34,18 @@ interface SignalCheckResult {
 }
 
 @Injectable()
-export class HetznerService {
-  private readonly logger = new Logger(HetznerService.name);
+export class DataServerService {
+  private readonly logger = new Logger(DataServerService.name);
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private cache: Map<string, { data: any; timestamp: number }> = new Map();
   private readonly CACHE_TTL = 30000; // 30 seconds
 
   constructor() {
-    this.baseUrl = process.env.HETZNER_DATA_URL || 'http://46.224.99.27:5000';
-    this.apiKey = process.env.HETZNER_API_KEY || '';
-    this.logger.log(`Hetzner Data Service initialized: ${this.baseUrl}`);
+    // Contabo data server URL
+    this.baseUrl = process.env.DATA_SERVER_URL || process.env.HETZNER_DATA_URL || 'http://62.171.183.32:5000';
+    this.apiKey = process.env.DATA_SERVER_API_KEY || process.env.HETZNER_API_KEY || '';
+    this.logger.log(`Data Server Service initialized: ${this.baseUrl}`);
   }
 
   private async request<T>(
@@ -65,7 +66,7 @@ export class HetznerService {
       });
       return response.data;
     } catch (error: any) {
-      this.logger.error(`Hetzner request failed: ${path} - ${error.message}`);
+      this.logger.error(`Data server request failed: ${path} - ${error.message}`);
       return null;
     }
   }

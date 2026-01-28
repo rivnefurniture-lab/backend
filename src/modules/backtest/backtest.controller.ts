@@ -44,33 +44,33 @@ export class BacktestController {
   private async getUserId(req: AuthenticatedRequest): Promise<number> {
     const supabaseId = req.user?.sub || '';
     const email = req.user?.email || '';
-
+    
     // Check cache first
     const cached = this.userIdCache.get(supabaseId);
     if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
       return cached.id;
     }
-
+    
     try {
       let user = await this.prisma.user.findFirst({
         where: { supabaseId },
         select: { id: true },
       });
-
+      
       if (!user && email) {
         user = await this.prisma.user.findUnique({
           where: { email },
           select: { id: true },
         });
       }
-
+      
       const userId = user?.id || 1;
-
+      
       // Cache the result
       if (supabaseId && userId !== 1) {
         this.userIdCache.set(supabaseId, { id: userId, timestamp: Date.now() });
       }
-
+      
       return userId;
     } catch {
       // Return cached value if available as fallback
@@ -573,7 +573,7 @@ export class BacktestController {
     @Body() dto: RunBacktestDto,
   ) {
     const result = await this.backtestService.runBacktest(dto);
-
+    
     if (result.status === 'success') {
       const userId = await this.getUserId(req);
       const saved = await this.backtestService.saveBacktestResult(
@@ -583,7 +583,7 @@ export class BacktestController {
       );
       return { ...result, savedId: saved.id };
     }
-
+    
     return result;
   }
 
@@ -600,7 +600,7 @@ export class BacktestController {
   @Get('results')
   async getResults(@Req() req: AuthenticatedRequest) {
     try {
-      const userId = await this.getUserId(req);
+    const userId = await this.getUserId(req);
 
       // Check cache first
       const cached = this.resultsCache.get(userId);
@@ -632,11 +632,11 @@ export class BacktestController {
   @Get('results/:id/export/csv')
   async exportCSV(@Param('id') id: string, @Res() res: Response) {
     const result = await this.backtestService.getBacktestResult(parseInt(id));
-
+    
     if (!result || !result.trades) {
       return res.status(404).json({ error: 'Backtest result not found' });
     }
-
+    
     const headers = [
       'Date',
       'Time',
@@ -659,11 +659,11 @@ export class BacktestController {
         t.profit_percent || '0',
         t.profit_usd || '0',
         t.equity,
-        `"${t.reason || ''}"`,
+      `"${t.reason || ''}"`,
         `"${(t.indicatorProof || []).map((p: any) => `${p.indicator}: ${p.value}`).join('; ')}"`,
       ].join(','),
     );
-
+    
     const csv = [headers.join(','), ...rows].join('\n');
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader(

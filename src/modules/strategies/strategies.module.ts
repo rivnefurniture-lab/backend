@@ -3,11 +3,11 @@ import { StrategiesController } from './strategies.controller';
 import { StrategiesService } from './strategies.service';
 import { ExchangeModule } from '../exchange/exchange.module';
 import { PrismaModule } from '../../prisma/prisma.module';
-import { HetznerModule } from '../hetzner/hetzner.module';
+import { DataServerModule } from '../data-server/data-server.module';
 import { SubscriptionModule } from '../subscription/subscription.module';
 
 @Module({
-  imports: [ExchangeModule, PrismaModule, HetznerModule, SubscriptionModule],
+  imports: [ExchangeModule, PrismaModule, DataServerModule, SubscriptionModule],
   controllers: [StrategiesController],
   providers: [StrategiesService],
   exports: [StrategiesService],
