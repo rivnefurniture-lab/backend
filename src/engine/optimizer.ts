@@ -11,22 +11,7 @@ import { runBacktest, BacktestConfig, BacktestResult } from './backtest-engine';
 
 export interface ParameterRange {
   /** Which parameter to vary */
-  param:
-    | 'rsiPeriod'
-    | 'rsiThreshold'
-    | 'maFastPeriod'
-    | 'maSlowPeriod'
-    | 'maType'
-    | 'bbPeriod'
-    | 'bbDeviation'
-    | 'bbThreshold'
-    | 'timeframe'
-    | 'takeProfit'
-    | 'stopLoss'
-    | 'baseOrderSize'
-    | 'maxActiveDeals'
-    | 'safetyOrdersCount'
-    | 'priceDeviation';
+  param: string;
   /** Array of values to try (e.g. [7, 14, 21] or ['1h', '4h']) */
   values: (number | string)[];
 }
@@ -288,7 +273,7 @@ export async function runOptimizer(
   request: OptimizeRequest,
 ): Promise<OptimizeResult> {
   const startTime = Date.now();
-  const { baseConfig, parameters, goal, maxCombinations = 200, concurrency = 3 } = request;
+  const { baseConfig, parameters, goal, maxCombinations = 1000, concurrency = 5 } = request;
 
   try {
     // Generate all parameter combinations
