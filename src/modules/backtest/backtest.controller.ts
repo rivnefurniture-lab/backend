@@ -17,6 +17,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { QueueService } from './queue.service';
 import { SubscriptionService } from '../subscription/subscription.service';
 import { runBacktest as runFastBacktest, BacktestConfig } from '../../engine/backtest-engine';
+import { runOptimizer, OptimizeRequest } from '../../engine/optimizer';
 
 interface JwtUser {
   sub: string; // Supabase UUID
@@ -653,6 +654,23 @@ export class BacktestController {
       targetProfit: dto.target_profit || 0,
     };
     return runFastBacktest(config);
+  }
+
+  /**
+   * Strategy Optimizer — runs many backtests with different parameter
+   * combinations and returns ranked results.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('optimize')
+  async optimize(@Body() body: any) {
+    const request: OptimizeRequest = {
+      baseConfig: body.baseConfig || {},
+      parameters: body.parameters || [],
+      goal: body.goal || 'maxProfit',
+      maxCombinations: Math.min(body.maxCombinations || 100, 200),
+      concurrency: Math.min(body.concurrency || 3, 5),
+    };
+    return runOptimizer(request);
   }
 
   // Cache for backtest results (30 second TTL per user)
