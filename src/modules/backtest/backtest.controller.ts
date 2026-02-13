@@ -16,6 +16,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 import { PrismaService } from '../../prisma/prisma.service';
 import { QueueService } from './queue.service';
 import { SubscriptionService } from '../subscription/subscription.service';
+import { runBacktest as runFastBacktest, BacktestConfig } from '../../engine/backtest-engine';
 
 interface JwtUser {
   sub: string; // Supabase UUID
@@ -569,30 +570,89 @@ export class BacktestController {
     };
   }
 
+  /**
+   * Fast in-process backtest — fetches data from Binance, calculates
+   * indicators in TypeScript, uses the same condition logic as live trading.
+   * No queue, no Python, no Parquet files needed.
+   */
   @UseGuards(JwtAuthGuard)
   @Post('run')
   async runBacktest(
     @Req() req: AuthenticatedRequest,
     @Body() dto: RunBacktestDto,
   ) {
-    const result = await this.backtestService.runBacktest(dto);
-    
+    const config: BacktestConfig = {
+      strategyName: dto.strategy_name || 'backtest',
+      pairs: dto.pairs || [],
+      maxActiveDeals: dto.max_active_deals || 1,
+      initialBalance: dto.initial_balance || 10000,
+      baseOrderSize: dto.base_order_size || 100,
+      tradingFee: dto.trading_fee ?? 0.1,
+      startDate: dto.start_date || '',
+      endDate: dto.end_date || '',
+      entryConditions: dto.entry_conditions || [],
+      exitConditions: dto.exit_conditions || [],
+      safetyOrderToggle: dto.safety_order_toggle || false,
+      safetyOrderSize: dto.safety_order_size || 0,
+      priceDeviation: dto.price_deviation || 1,
+      maxSafetyOrdersCount: dto.max_safety_orders_count || 0,
+      safetyOrderVolumeScale: dto.safety_order_volume_scale || 1,
+      safetyOrderStepScale: dto.safety_order_step_scale || 1,
+      safetyConditions: dto.safety_conditions || [],
+      stopLossToggle: dto.stop_loss_toggle || false,
+      stopLossValue: dto.stop_loss_value || 0,
+      stopLossTimeout: dto.stop_loss_timeout || 0,
+      priceChangeActive: dto.price_change_active || false,
+      targetProfit: dto.target_profit || 0,
+      conditionsActive: dto.conditions_active ?? true,
+      reinvestProfit: dto.reinvest_profit || 0,
+      riskReduction: dto.risk_reduction || 0,
+      cooldownBetweenDeals: dto.cooldown_between_deals || 0,
+      closeDealAfterTimeout: dto.close_deal_after_timeout || 0,
+      minprofToggle: dto.minprof_toggle || false,
+      minimalProfit: dto.minimal_profit || 0,
+    };
+
+    const result = await runFastBacktest(config);
+
     if (result.status === 'success') {
-      const userId = await this.getUserId(req);
-      const saved = await this.backtestService.saveBacktestResult(
-        userId,
-        dto,
-        result,
-      );
-      return { ...result, savedId: saved.id };
+      try {
+        const userId = await this.getUserId(req);
+        const saved = await this.backtestService.saveBacktestResult(
+          userId,
+          dto,
+          result,
+        );
+        return { ...result, savedId: saved.id };
+      } catch (saveErr: any) {
+        // Still return result even if save fails
+        return { ...result, saveError: saveErr.message };
+      }
     }
-    
+
     return result;
   }
 
   @Post('demo')
   async runDemoBacktest(@Body() dto: RunBacktestDto) {
-    return this.backtestService.runBacktest(dto);
+    const config: BacktestConfig = {
+      strategyName: dto.strategy_name || 'demo',
+      pairs: dto.pairs || [],
+      maxActiveDeals: dto.max_active_deals || 1,
+      initialBalance: dto.initial_balance || 10000,
+      baseOrderSize: dto.base_order_size || 100,
+      tradingFee: dto.trading_fee ?? 0.1,
+      startDate: dto.start_date || '',
+      endDate: dto.end_date || '',
+      entryConditions: dto.entry_conditions || [],
+      exitConditions: dto.exit_conditions || [],
+      conditionsActive: dto.conditions_active ?? true,
+      stopLossToggle: dto.stop_loss_toggle || false,
+      stopLossValue: dto.stop_loss_value || 0,
+      priceChangeActive: dto.price_change_active || false,
+      targetProfit: dto.target_profit || 0,
+    };
+    return runFastBacktest(config);
   }
 
   // Cache for backtest results (30 second TTL per user)

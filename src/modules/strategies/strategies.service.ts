@@ -5,6 +5,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { DataServerService } from '../data-server/data-server.service';
 import { Exchange } from 'ccxt';
 import * as path from 'path';
+import { checkAllConditions as sharedCheckAllConditions } from '../../engine/conditions';
 
 interface ActiveJob {
   id: string;
@@ -92,72 +93,22 @@ export class StrategiesService {
     }
   }
 
-  // Check a single condition against data from Hetzner
-  private checkCondition(data: Record<string, any>, condition: any): boolean {
-    const { indicator, subfields } = condition;
-    const conditionType = subfields?.Condition || 'Greater Than';
-    const targetValue = subfields?.['Signal Value'] || 0;
+  // Previous data for crossing detection in live trading
+  private prevDataBySymbol: Map<string, Record<string, any>> = new Map();
 
-    let currentValue: number | null = null;
-    let compareValue: number | null = null;
-
-    // Map indicator to parquet column names
-    if (indicator === 'RSI') {
-      const period = subfields?.['RSI Length'] || 14;
-      currentValue = data[`RSI_${period}`];
-      compareValue = targetValue;
-    } else if (indicator === 'MA') {
-      const fastPeriod = subfields?.['Fast MA'] || 50;
-      const slowPeriod = subfields?.['Slow MA'] || 200;
-      const maType = subfields?.['MA Type'] || 'SMA';
-      currentValue = data[`${maType}_${fastPeriod}`];
-      compareValue = data[`${maType}_${slowPeriod}`];
-    } else if (indicator === 'BollingerBands') {
-      const period = subfields?.['BB% Period'] || 20;
-      const dev = subfields?.['Deviation'] || 2;
-      currentValue = data[`BB_%B_${period}_${dev}`];
-      compareValue = targetValue;
-    } else if (indicator === 'MACD') {
-      const preset = subfields?.['MACD Preset'] || '12,26,9';
-      const [fast, slow, signal] = preset.split(',').map(Number);
-      currentValue = data[`MACD_${fast}_${slow}_${signal}`];
-      compareValue = data[`MACD_${fast}_${slow}_${signal}_Signal`];
-    }
-
-    if (currentValue === null || currentValue === undefined) {
-      return false;
-    }
-
-    // Evaluate condition
-    switch (conditionType) {
-      case 'Less Than':
-        return currentValue < (compareValue ?? targetValue);
-      case 'Greater Than':
-        return currentValue > (compareValue ?? targetValue);
-      case 'Crossing Up':
-      case 'Crossing Down':
-        // For crossings, we'd need previous values - simplified for now
-        return indicator === 'MA' || indicator === 'MACD'
-          ? currentValue > (compareValue ?? targetValue)
-          : currentValue > targetValue;
-      default:
-        return false;
-    }
-  }
-
-  // Check all conditions for entry/exit
+  /**
+   * Check all conditions using the shared engine (same logic as backtest).
+   * This ensures live trading signals are identical to backtest signals.
+   */
   private checkAllConditions(
     data: Record<string, any>,
     conditions: any[],
+    symbol?: string,
   ): boolean {
-    if (!conditions || conditions.length === 0) return false;
-
-    for (const cond of conditions) {
-      if (cond.indicator === 'IMMEDIATE') return true;
-      if (cond.indicator === 'TIME_ELAPSED') continue; // Handled separately
-      if (!this.checkCondition(data, cond)) return false;
-    }
-    return true;
+    const prevData = symbol ? this.prevDataBySymbol.get(symbol) || null : null;
+    const result = sharedCheckAllConditions(data, prevData, conditions);
+    if (symbol) this.prevDataBySymbol.set(symbol, { ...data });
+    return result;
   }
 
   // Get user's strategies
@@ -386,8 +337,8 @@ export class StrategiesService {
           });
 
           if (!openTrade) {
-            // Check entry conditions
-            const shouldEnter = this.checkAllConditions(data, entryConditions);
+            // Check entry conditions (using shared engine for identical logic to backtest)
+            const shouldEnter = this.checkAllConditions(data, entryConditions, symbol);
 
             if (shouldEnter) {
               await this.executeBuy(job, exchange, symbol, currentPrice);
@@ -407,7 +358,7 @@ export class StrategiesService {
                 (Date.now() - new Date(entryTime).getTime()) / 60000;
               shouldExit = minutesSinceEntry >= minutesRequired;
             } else {
-              shouldExit = this.checkAllConditions(data, exitConditions);
+              shouldExit = this.checkAllConditions(data, exitConditions, symbol);
             }
 
             if (shouldExit) {
