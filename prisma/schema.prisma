@@ -152,6 +152,10 @@ model Trade {
   user          User     @relation(fields: [userId], references: [id])
   strategyRunId Int?
   strategyRun   StrategyRun? @relation(fields: [strategyRunId], references: [id])
+
+  @@index([userId])
+  @@index([userId, createdAt])
+  @@index([strategyRunId])
 }
 
 model BacktestResult {

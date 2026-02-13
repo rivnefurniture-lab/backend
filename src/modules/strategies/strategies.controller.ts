@@ -384,9 +384,13 @@ export class StrategiesController {
     return this.strategies.getRunDetails(userId, parseInt(runId));
   }
 
-  // List all active jobs (admin/monitoring)
+  // List all active jobs (requires auth)
+  @UseGuards(JwtAuthGuard)
   @Get('jobs')
-  getJobs() {
-    return this.strategies.listJobs();
+  async getJobs(@Req() req: AuthenticatedRequest) {
+    const userId = await this.getUserId(req);
+    const allJobs = this.strategies.listJobs();
+    // Filter to only show user's own jobs
+    return allJobs.filter(j => j.userId === userId);
   }
 }

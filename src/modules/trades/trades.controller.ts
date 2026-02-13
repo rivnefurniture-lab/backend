@@ -15,12 +15,21 @@ interface AuthenticatedRequest extends Request {
 @Controller('trades')
 @UseGuards(JwtAuthGuard)
 export class TradesController {
+  // Cache for userId resolution
+  private userIdCache: Map<string, { id: number; timestamp: number }> = new Map();
+  private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
   constructor(private prisma: PrismaService) {}
 
-  // Resolve Supabase UUID to database user ID
+  // Resolve Supabase UUID to database user ID (with caching)
   private async getUserId(req: AuthenticatedRequest): Promise<number> {
     const supabaseId = req.user?.sub || '';
     const email = req.user?.email || '';
+
+    const cached = this.userIdCache.get(supabaseId);
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      return cached.id;
+    }
 
     try {
       let user = await this.prisma.user.findFirst({
@@ -35,8 +44,13 @@ export class TradesController {
         });
       }
 
-      return user?.id || 1;
+      const userId = user?.id || 1;
+      if (supabaseId && userId !== 1) {
+        this.userIdCache.set(supabaseId, { id: userId, timestamp: Date.now() });
+      }
+      return userId;
     } catch (e) {
+      if (cached) return cached.id;
       return 1;
     }
   }
@@ -108,78 +122,73 @@ export class TradesController {
     const userId = await this.getUserId(req);
 
     try {
-      // Get all trades
-      const trades = await this.prisma.trade.findMany({
-        where: { userId },
-      });
-
-      // Get today's trades
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
+      const yesterdayStart = new Date(todayStart);
+      yesterdayStart.setDate(yesterdayStart.getDate() - 1);
 
-      const todayTrades = await this.prisma.trade.findMany({
-        where: {
-          userId,
-          createdAt: { gte: todayStart },
-        },
-      });
+      const closedWhere = { userId, exitPrice: { not: null } };
+      const openWhere = { userId, exitPrice: null, side: 'buy' };
+      const todayWhere = { userId, createdAt: { gte: todayStart } };
+      const yesterdayWhere = {
+        userId,
+        createdAt: { gte: yesterdayStart, lt: todayStart },
+      };
 
-      // Calculate stats - only count CLOSED trades for win rate (trades with exitPrice set)
-      const closedTrades = trades.filter((t) => t.exitPrice !== null);
-      const openTrades = trades.filter(
-        (t) => t.exitPrice === null && t.side === 'buy',
-      );
+      // Use aggregates/counts instead of loading all trades into memory
+      const [
+        closedAgg,
+        winningCount,
+        openCount,
+        todayTrades,
+        todayAgg,
+        yesterdayAgg,
+      ] = await Promise.all([
+        this.prisma.trade.aggregate({
+          where: closedWhere,
+          _sum: { profitLoss: true },
+          _count: true,
+        }),
+        this.prisma.trade.count({
+          where: { ...closedWhere, profitLoss: { gt: 0 } },
+        }),
+        this.prisma.trade.count({ where: openWhere }),
+        this.prisma.trade.findMany({
+          where: todayWhere,
+          select: {
+            profitLoss: true,
+            side: true,
+            entryPrice: true,
+            quantity: true,
+          },
+        }),
+        this.prisma.trade.aggregate({
+          where: todayWhere,
+          _sum: { profitLoss: true },
+        }),
+        this.prisma.trade.aggregate({
+          where: yesterdayWhere,
+          _sum: { profitLoss: true },
+        }),
+      ]);
 
-      const totalClosedTrades = closedTrades.length;
-      const totalProfit = closedTrades.reduce(
-        (sum, t) => sum + (t.profitLoss || 0),
-        0,
-      );
-      const winningTrades = closedTrades.filter(
-        (t) => (t.profitLoss || 0) > 0,
-      ).length;
+      const totalClosedTrades = closedAgg._count;
+      const totalProfit = closedAgg._sum.profitLoss ?? 0;
+      const winningTrades = winningCount;
       const winRate =
         totalClosedTrades > 0 ? (winningTrades / totalClosedTrades) * 100 : 0;
+      const totalTrades = totalClosedTrades + openCount;
 
-      // Total trades = closed trades + open positions
-      const totalTrades = totalClosedTrades + openTrades.length;
-
-      // Calculate today's PnL
-      const todayProfit = todayTrades.reduce(
-        (sum, t) => sum + (t.profitLoss || 0),
-        0,
-      );
-
-      // Get total invested today (sum of entry values)
+      const todayProfit = todayAgg._sum.profitLoss ?? 0;
       const todayInvested = todayTrades.reduce((sum, t) => {
         if (t.side === 'buy' && t.entryPrice) {
           return sum + t.entryPrice * t.quantity;
         }
         return sum;
       }, 0);
-
-      // Calculate PnL percentage
       const todayPnLPercent =
         todayInvested > 0 ? (todayProfit / todayInvested) * 100 : 0;
-
-      // Get yesterday's trades for comparison
-      const yesterdayStart = new Date(todayStart);
-      yesterdayStart.setDate(yesterdayStart.getDate() - 1);
-
-      const yesterdayTrades = await this.prisma.trade.findMany({
-        where: {
-          userId,
-          createdAt: {
-            gte: yesterdayStart,
-            lt: todayStart,
-          },
-        },
-      });
-
-      const yesterdayProfit = yesterdayTrades.reduce(
-        (sum, t) => sum + (t.profitLoss || 0),
-        0,
-      );
+      const yesterdayProfit = yesterdayAgg._sum.profitLoss ?? 0;
 
       return {
         totalTrades,

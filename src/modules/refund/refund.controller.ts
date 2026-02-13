@@ -2,6 +2,7 @@ import { Controller, Post, Get, Body, UseGuards, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { PrismaService } from '../../prisma/prisma.service';
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
+import { sendRefundAdminEmail } from '../../services/mail.service';
 
 interface JwtUser {
   sub: string; // Supabase uses UUID strings
@@ -70,8 +71,10 @@ export class RefundController {
         },
       });
 
-      // TODO: Send email notification to admin
-      console.log(`New refund request from ${user.email}: ${body.reason}`);
+      // Notify admin via email
+      sendRefundAdminEmail(user.email, body.reason, refund.id).catch((err) =>
+        console.error('Failed to send refund admin email:', err),
+      );
 
       return {
         ok: true,

@@ -1,5 +1,3 @@
-// TODO: register and chose plan https://sendgrid.com/en-us/pricing
-// TODO: Update with your own key https://myaccount.google.com/apppasswords
 import nodemailer, { SentMessageInfo, Transporter } from 'nodemailer';
 
 const {
@@ -11,6 +9,7 @@ const {
   GMAIL_EMAIL,
   GMAIL_PASS,
   FROM_EMAIL,
+  ADMIN_EMAIL,
   NEXT_PUBLIC_APP_URL,
   NODE_ENV,
 } = process.env;
@@ -90,6 +89,38 @@ export async function sendPasswordResetEmail(
 
   if (NODE_ENV !== 'production') {
     console.log(`Password reset email sent`);
+  }
+
+  return info;
+}
+
+export async function sendRefundAdminEmail(
+  userEmail: string,
+  reason: string,
+  refundId: number,
+): Promise<SentMessageInfo | null> {
+  const adminTo = ADMIN_EMAIL || GMAIL_EMAIL;
+  if (!adminTo) {
+    console.warn('No ADMIN_EMAIL configured — skipping refund notification');
+    return null;
+  }
+
+  const from = FROM_EMAIL || GMAIL_EMAIL || '"Algotcha" <no-reply@algotcha.com>';
+  const info = await transporter.sendMail({
+    from,
+    to: adminTo,
+    subject: `[Algotcha] New Refund Request #${refundId}`,
+    html: `
+      <h2>New Refund Request</h2>
+      <p><strong>User:</strong> ${userEmail}</p>
+      <p><strong>Reason:</strong> ${reason}</p>
+      <p><strong>Request ID:</strong> ${refundId}</p>
+      <p><a href="${NEXT_PUBLIC_APP_URL || 'https://algotcha.com'}/admin">Review in Admin Panel</a></p>
+    `,
+  });
+
+  if (NODE_ENV !== 'production') {
+    console.log('Refund admin email sent to', adminTo);
   }
 
   return info;

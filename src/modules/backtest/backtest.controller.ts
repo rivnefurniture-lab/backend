@@ -96,8 +96,11 @@ export class BacktestController {
   private readonly STRATEGIES_LIST_CACHE_TTL = 60000; // 60 seconds
 
   @Get('strategies')
-  getAllStrategies() {
-    // Check cache first
+  getAllStrategies(@Res({ passthrough: true }) res: Response) {
+    // Tell browsers/CDNs they can cache this for 60s
+    res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=120');
+
+    // Check in-memory cache first
     if (this.strategiesListCache && Date.now() - this.strategiesListCache.timestamp < this.STRATEGIES_LIST_CACHE_TTL) {
       return this.strategiesListCache.data;
     }
